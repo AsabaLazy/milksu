@@ -633,10 +633,18 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
     queuedGuidanceStalled, abortStalled: abortStalledProp,
   } = props
 
-  const reviewedComposerSkills: ComposerSkillOption[] = CODING_SKILLS.map(skill => ({
-    ...skill,
-    icon: skillIcons[skill.name] ?? Plug,
-  }))
+  const reviewedComposerSkills: ComposerSkillOption[] = [
+    ...CODING_SKILLS.map(skill => ({
+      ...skill,
+      icon: skillIcons[skill.name] ?? Plug,
+    })),
+    {
+      name: 'deep-research',
+      label: t('深度研究', 'Deep Research'),
+      description: t('检索资料并综合分析', 'Research and synthesize sources'),
+      icon: Compass,
+    },
+  ]
 
   const [draft, setDraft] = useState('')
   // Quoted material the reader picked in the transcript: shown above the input while they type the
@@ -1487,6 +1495,14 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
     const attachments = [...pendingAttachments]
     const text = textValue.trim() || (attachments.length ? t('请检查这些附件并完成我接下来需要处理的任务。', 'Please review these attachments and complete the task I need next.') : '')
     if (!text) return
+    if (skillToken === 'deep-research' && kernel === 'dsh') {
+      setAttachmentError(t('深度研究仅支持 Pi。请切换到 Pi 后再发送。', 'Deep Research is only available with Pi. Select Pi before sending.'))
+      return
+    }
+    if (skillToken === 'deep-research' && parentTurnActive) {
+      setAttachmentError(t('请等待当前回合结束后再启动深度研究。', 'Wait for the current turn to finish before starting Deep Research.'))
+      return
+    }
     if (kernel === 'dsh') {
       const decision = dshSlashDecision({
         kernel: 'dsh',
@@ -2100,7 +2116,12 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
                       {visibleSkillOptions.map(skill => {
                         const Icon = skill.icon
                         return (
-                          <DropdownMenuItem key={skill.name} className="composer-add-option" disabled={!workspaceReady} onSelect={() => insertSkillToken(skill.name)}>
+                          <DropdownMenuItem
+                            key={skill.name}
+                            className="composer-add-option"
+                            disabled={!workspaceReady || (skill.name === 'deep-research' && (parentTurnActive || goalMode))}
+                            onSelect={() => insertSkillToken(skill.name)}
+                          >
                             <Icon className="size-4 shrink-0" />
                             <span className="min-w-0 flex-1">
                               <span className="block text-label font-medium">{skill.label}</span>

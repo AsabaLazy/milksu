@@ -146,7 +146,7 @@ import { composeMilkSUWorkflowSystemPrompt } from "./bridge-workflow-prompt.js";
 import { createEnvExtension } from "./bridge-env.js";
 import { createComputerUseDriverExtension } from "./bridge-computer-use-driver.js";
 import { createComputerUseToolExtension } from "./bridge-computer-use-tool.js";
-import { resolveCodingSkillPaths, reviewedCodingSkillPaths } from "./bridge-skills.js";
+import { resolvePiCodingSkillPaths } from "./bridge-skills.js";
 import { createToolResultBoundExtension } from "./bridge-tool-result-bound.js";
 import { createHangGuardExtension } from "./bridge-hang-guard.js";
 import {
@@ -1790,7 +1790,7 @@ function reviewedCodingResourceRoots(
   void sessionRole;
   const attachmentRoot = process.env.MILKSU_CODING_ATTACHMENT_ROOT;
   return [
-    ...resolveCodingSkillPaths(
+    ...resolvePiCodingSkillPaths(
       sidecarResourceDirectory,
       sessionRole,
       disabledSkills,
@@ -1867,7 +1867,7 @@ async function loadRuntimeSessionPolicy(cwd, command) {
   const disabledSkills = Array.isArray(command.disabledSkills)
     ? command.disabledSkills
     : [];
-  const codingSkillPaths = resolveCodingSkillPaths(
+  const codingSkillPaths = resolvePiCodingSkillPaths(
     sidecarResourceDirectory,
     effectiveSessionRole,
     disabledSkills,
@@ -2148,7 +2148,7 @@ async function sendMessage(command) {
       )
       || JSON.stringify(previousPolicy.skillNames ?? [])
         !== JSON.stringify(
-          resolveCodingSkillPaths(
+          resolvePiCodingSkillPaths(
             sidecarResourceDirectory,
             "",
             command.disabledSkills,

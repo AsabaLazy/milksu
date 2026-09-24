@@ -20,7 +20,11 @@ import { ensureOwnerWritable } from './lib/bundle-owner-writable.mjs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { build } from 'esbuild'
-import { firstPartyCodingSkillNames, optionalCodingSkillNames } from '../sidecar/pi/bridge-skills.js'
+import {
+  firstPartyCodingSkillNames,
+  optionalCodingSkillNames,
+  piOnlyCodingSkillNames,
+} from '../sidecar/pi/bridge-skills.js'
 import { prepareReviewedTypeScript } from '../sidecar/pi/prepare-reviewed-ts.mjs'
 import {
   computerUseRuntimeRoot,
@@ -1332,7 +1336,11 @@ async function buildSidecar(platform) {
     : ''
   const archifySource = join(repositoryRoot, 'third_party', 'archify', 'archify')
   const archifyOutput = join(output, 'skills', 'archify')
-  const packagedSkillNames = [...firstPartyCodingSkillNames, ...optionalCodingSkillNames]
+  const packagedSkillNames = [
+    ...firstPartyCodingSkillNames,
+    ...optionalCodingSkillNames,
+    ...piOnlyCodingSkillNames,
+  ]
   const firstPartySkills = packagedSkillNames.map(name => ({
     name,
     source: join(repositoryRoot, 'skills', name),
@@ -1735,6 +1743,13 @@ async function buildSidecar(platform) {
         paths: optionalCodingSkillNames.map(name => `skills/${name}`),
         scope: 'coding-opt-in',
       },
+      piOnly: {
+        package: '@milksu/coding-skills',
+        version: '1',
+        origin: 'first-party',
+        paths: piOnlyCodingSkillNames.map(name => `skills/${name}`),
+        scope: 'pi-only',
+      },
       archify: {
         package: 'tt-a1i/archify',
         version: archifyPackage.version,
@@ -1987,7 +2002,11 @@ async function smokeSidecar(platform) {
     join(output, 'lsp-runtime', 'node_modules', '@vue', 'language-server', 'LICENSE'),
     join(output, 'lsp-runtime', 'node_modules', 'typescript', 'LICENSE.txt'),
     join(output, 'skills', 'archify', 'LICENSE'),
-    ...[...firstPartyCodingSkillNames, ...optionalCodingSkillNames].flatMap(name => [
+    ...[
+      ...firstPartyCodingSkillNames,
+      ...optionalCodingSkillNames,
+      ...piOnlyCodingSkillNames,
+    ].flatMap(name => [
       join(output, 'skills', name, 'SKILL.md'),
       join(output, 'skills', name, 'agents', 'openai.yaml'),
     ]),
@@ -2202,7 +2221,7 @@ async function smokeSidecar(platform) {
     [
       '{"action":"create_session","conversationId":"packaged-smoke","executionMode":"go","approvalPolicy":"workspace-auto"}',
       '{"action":"destroy_session","conversationId":"packaged-smoke"}',
-      '{"action":"create_session","conversationId":"packaged-skills-disabled","executionMode":"go","approvalPolicy":"workspace-auto","disabledSkills":["product-design","archify","../../untrusted"]}',
+      '{"action":"create_session","conversationId":"packaged-skills-disabled","executionMode":"go","approvalPolicy":"workspace-auto","disabledSkills":["product-design","archify","deep-research","../../untrusted"]}',
       '{"action":"destroy_session","conversationId":"packaged-skills-disabled"}',
       '',
     ].join('\n'),
@@ -2247,11 +2266,12 @@ async function smokeSidecar(platform) {
     || !expectedTools.every(tool => ready.tools?.includes(tool))
     || ready.executionMode !== 'go'
     || ready.approvalPolicy !== 'workspace-auto'
-    || !['archify', ...firstPartyCodingSkillNames]
+    || !['archify', ...firstPartyCodingSkillNames, ...piOnlyCodingSkillNames]
       .every(name => ready.skills?.includes(name))
     || !disabledSkillsReady
     || disabledSkillsReady.skills?.includes('product-design')
     || disabledSkillsReady.skills?.includes('archify')
+    || piOnlyCodingSkillNames.some(name => disabledSkillsReady.skills?.includes(name))
     || !firstPartyCodingSkillNames
       .filter(name => name !== 'product-design')
       .every(name => disabledSkillsReady.skills?.includes(name))

@@ -39,12 +39,13 @@ The goal is not the raw number of installed packages. The acceptance metric is a
 | `@playwright/mcp` | `0.0.78` | Normal Coding, explicit sandbox Browser or Browser Use | Dedicated-profile Browser control or extension-mode access to one user-approved real tab | Exact npm pin; Apache-2.0; the two modes have separate Scope/profile semantics; transient descriptor or extension pairing; no ambient whole-profile authority |
 | `@napi-rs/system-ocr` | `1.1.0` | Normal Coding attachments | Local text extraction for images when the selected model has no vision | Exact npm pin; MIT; local-only fallback and explicit degradation disclosure |
 | `pi-subagents` | `0.70.1` | Coding, CTF, CVE, and Lab | Detached background subagents. The Pi 0.87.0 kernel does not provide this | Exact npm pin; MIT. Peers `@earendil-works/pi-agent-core` and `@earendil-works/chord` are pinned at 0.87.0 because the extension imports them. Builtin roles only. Workflow JavaScript, Gist share, `~/.pi` / project `.pi` / `~/.agents` discovery, and tmux/Herdr panes stay off. External CLI launches always ask. Companion does not load this package |
+| `deep-research` | MilkSU source | Pi-selected conversations | Source-grounded research planning, reviewed subagent delegation, and synthesis | First-party Skill; loaded only by Pi's reviewed path; excluded from the shared DSH catalog; same-turn subagent overlap is not yet verified |
 
 The packaged Sidecar smoke test asserts both sides of the boundary. The
 `ready.extensions` list is derived from the tools and flags actually registered
 by the resource loader; it is not a hard-coded declaration:
 
-- a normal Coding session exposes the reviewed frontend QA/Archify Skills, Goal, background tasks and the reviewed MCP Adapter;
+- a normal Pi Coding session exposes the reviewed Skills (including Pi-only Deep Research), Goal, background tasks and the reviewed MCP Adapter;
   bundled TypeScript/Vue/Go LSP diagnostics are available, and Playwright appears only after the
   user explicitly starts the Coding Browser;
 - a CTF session exposes none of these external resources and continues to use

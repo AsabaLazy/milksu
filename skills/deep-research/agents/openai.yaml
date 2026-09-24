@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Research"
+  short_description: "Research scoped questions with source-grounded evidence and synthesis"
+  default_prompt: "Use $deep-research to research this question and synthesize source-backed findings."

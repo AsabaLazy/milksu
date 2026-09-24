@@ -11,6 +11,11 @@ export const firstPartyCodingSkillNames = Object.freeze([
   "recon-authorized-target",
 ]);
 
+// Keep Pi-only skills out of the shared names consumed by the DSH catalog.
+export const piOnlyCodingSkillNames = Object.freeze([
+  "deep-research",
+]);
+
 export const optionalCodingSkillNames = Object.freeze([
   "ghidra-rpc",
   "jadx",
@@ -85,4 +90,27 @@ export function resolveCodingSkillPaths(
     ),
     ...extraCodingSkillPaths(extraPaths, pathExists),
   ];
+}
+
+export function resolvePiCodingSkillPaths(
+  bridgeDirectory,
+  sessionRole = "",
+  disabledSkills = [],
+  extraPaths = [],
+  pathExists = existsSync,
+) {
+  const paths = resolveCodingSkillPaths(
+    bridgeDirectory,
+    sessionRole,
+    disabledSkills,
+    extraPaths,
+    pathExists,
+  );
+  const disabled = disabledSkillNames(disabledSkills);
+  const piOnlyPaths = piOnlyCodingSkillNames
+    .filter(name => !disabled.has(name))
+    .map(name => join(bridgeDirectory, "skills", name))
+    .filter(path => pathExists(join(path, "SKILL.md")));
+
+  return [...paths, ...piOnlyPaths.filter(path => !paths.includes(path))];
 }

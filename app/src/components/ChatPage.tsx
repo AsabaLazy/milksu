@@ -621,12 +621,19 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   ), [currentThinkingProfile, thinkingLevel])
   const activeExtensions = conversation?.agentExtensions ?? []
   const selectedMCPServers = mcpServers ?? []
+  const agentKernel: 'pi' | 'dsh' = kernel ?? (conversation?.kernel === 'dsh' ? 'dsh' : 'pi')
   const enabledUserSkills = useMemo(() => userSkills.filter(skill => skill.enabled), [userSkills])
   const userSkillNames = useMemo(() => enabledUserSkills.map(skill => skill.name), [enabledUserSkills])
-  const activeSkills = useMemo(() => [
-    ...enabledCodingSkillNames(settings?.disabled_skills),
-    ...userSkillNames,
-  ], [settings?.disabled_skills, userSkillNames])
+  const activeSkills = useMemo(() => {
+    const skills = [
+      ...enabledCodingSkillNames(settings?.disabled_skills),
+      ...userSkillNames,
+    ].filter(name => name !== 'deep-research')
+    if (agentKernel === 'pi' && !settings?.disabled_skills?.includes('deep-research')) {
+      skills.push('deep-research')
+    }
+    return skills
+  }, [agentKernel, settings?.disabled_skills, userSkillNames])
   const userMCPServers = useMemo(() => (
     (mcpConfig?.servers ?? []).filter(server => server.scope === 'user')
   ), [mcpConfig])
@@ -897,7 +904,6 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
     || t('新标签页', 'New tab')
   )
   const workspaceLocked = Boolean(conversation?.messages.length)
-  const agentKernel: 'pi' | 'dsh' = kernel ?? (conversation?.kernel === 'dsh' ? 'dsh' : 'pi')
   const workingRoot = workingRootConversation(conversation, conversations.conversations)
   const workingItems = workingItemsForConversation(
     workingRoot,

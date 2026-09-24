@@ -8,7 +8,9 @@ import {
   extraCodingSkillPaths,
   firstPartyCodingSkillNames,
   optionalCodingSkillNames,
+  piOnlyCodingSkillNames,
   resolveCodingSkillPaths,
+  resolvePiCodingSkillPaths,
   reviewedCodingSkillNames,
   reviewedCodingSkillPaths,
 } from "./bridge-skills.js";
@@ -97,6 +99,25 @@ function skillFrontmatter(name) {
   }
   return fields;
 }
+
+test("deep research resolves in Pi but stays out of the shared DSH path", () => {
+  const name = "deep-research";
+  const path = join(repositoryRoot, "skills", name);
+  assert.deepEqual(piOnlyCodingSkillNames, [name]);
+  assert.ok(!firstPartyCodingSkillNames.includes(name));
+  assert.ok(!reviewedCodingSkillNames.includes(name));
+  assert.deepEqual(resolvePiCodingSkillPaths(repositoryRoot), [
+    ...resolveCodingSkillPaths(repositoryRoot),
+    path,
+  ]);
+  assert.ok(!resolvePiCodingSkillPaths(repositoryRoot, "", [name]).includes(path));
+  assert.ok(!resolveCodingSkillPaths(repositoryRoot).includes(path));
+
+  const fields = skillFrontmatter(name);
+  assert.equal(fields.name, name);
+  assert.ok(fields.description.startsWith("Use "));
+  assert.ok(fields.description.length <= 400);
+});
 
 test("first-party skill descriptions are Pi routing rules", () => {
   const catalog = [];
