@@ -150,6 +150,7 @@ import {
 import AgentChangeSummary from '@/components/AgentChangeSummary'
 import AgentExecutionPlan from '@/components/AgentExecutionPlan'
 import ContextUsageMeter from '@/components/ContextUsageMeter'
+import SessionSizeWarningPill from '@/components/SessionSizeWarningPill'
 import {
   agentRecoveryPrompt,
   emptyVisibleReplyRecoveryPrompt,
@@ -200,6 +201,12 @@ import {
 } from '@/composables/useConversations'
 import { useConversations } from '@/stores/conversationsStore'
 import { composerDraftKey } from '@/lib/composerDraftStore'
+import {
+  readDismissedSessionSizeKeys,
+  sessionSizeReport,
+  sessionSizeWarningKey,
+  writeDismissedSessionSizeKeys,
+} from '@/lib/sessionSizeWarning'
 import { subagentCitationText } from '@/lib/subagentRoster'
 import { conversationWorkspaceHome } from '@/lib/workspaceSessionRouting'
 import {
@@ -543,6 +550,11 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   const artifactPanel = useRef<CodingArtifactPreviewPanelHandle | null>(null)
   const [requestedArtifactPath, setRequestedArtifactPath] = useState('')
   const [imageGalleryRefreshToken, setImageGalleryRefreshToken] = useState(0)
+  // 会话过胖预警被「知道了」关掉的档位（按会话 + 体积档位，涨一档会重新提醒）。
+  // 持久化到 localStorage：重开后同一档位不该再冒出来（2026-09-30 修复）。
+  const [dismissedSessionSizeKeys, setDismissedSessionSizeKeys] = useState<Set<string>>(
+    () => readDismissedSessionSizeKeys(),
+  )
   const [, setEnvironmentLoading] = useState(false)
   const [environmentError, setEnvironmentError] = useState('')
   const [browserPanelError, setBrowserPanelError] = useState('')
@@ -1018,6 +1030,26 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   }), [currentModelSelection, conversation?.modelSource, pickerGroups, settings?.providers])
   // 全量聚合派生值的输入：只在结构变化时换引用（正文/思考增量不击穿它们）。
   const structuralMessages = useStructuralMessages(conversation?.messages ?? [])
+  // 预警口径：待发上下文体积（正文/思考/工具/附件），结构变化时重算。
+  // 输入用 structuralMessages：流式每个 delta 都换 messages 引用，但打字不会显著改变
+  // 体积档位；全量求和挂在结构版本上，避免每个增量重扫万条消息（与 #202 同一纪律）。
+  const sessionSize = useMemo(() => sessionSizeReport(structuralMessages), [structuralMessages])
+  const sessionSizeWarningKeyValue = conversation?.id
+    ? sessionSizeWarningKey(conversation.id, sessionSize)
+    : ''
+  const sessionSizeWarningVisible = sessionSize.over
+    && Boolean(conversation?.id)
+    && !dismissedSessionSizeKeys.has(sessionSizeWarningKeyValue)
+  // 「知道了」：关掉当前档位并落盘（重开时 readDismissedSessionSizeKeys 读回）。
+  const dismissSessionSizeWarning = useCallback(() => {
+    if (!sessionSizeWarningKeyValue) return
+    setDismissedSessionSizeKeys(previous => {
+      const next = new Set(previous)
+      next.add(sessionSizeWarningKeyValue)
+      writeDismissedSessionSizeKeys(next)
+      return next
+    })
+  }, [sessionSizeWarningKeyValue])
   const computerUseOperationEvidence = useMemo(() => (
     extractLatestComputerUseOperationEvidence(structuralMessages)
   ), [structuralMessages])
@@ -3281,6 +3313,14 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
             onToggleMultitask={enabled => conversations.setMultitask(enabled)}
             compactDisabled={continuity.compactDisabled}
             contextUsage={contextUsagePresentation}
+            sessionSizeWarning={sessionSizeWarningVisible ? (
+              <SessionSizeWarningPill
+                report={sessionSize}
+                compacting={compacting}
+                onCompactContext={onCompactContext}
+                onDismiss={dismissSessionSizeWarning}
+              />
+            ) : undefined}
             workspaceReady={Boolean(workspacePath)}
             workspaceLocked={workspaceLocked}
             workspaceName={workspaceName}

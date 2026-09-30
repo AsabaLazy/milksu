@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ComponentType,
+  type ReactNode,
 } from 'react'
 import {
   Button,
@@ -371,6 +372,16 @@ const COMPOSER_STYLES = `
 .chat-composer__meta-end .context-usage-meter .stroke-border {
   stroke: color-mix(in srgb, var(--foreground) 48%, transparent);
 }
+.chat-composer__meta-end .session-size-warning-pill {
+  height: 16px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.chat-composer__meta-end .session-size-warning-pill svg {
+  width: 12px;
+  height: 12px;
+}
 .chat-composer__island[data-shape='bar'] .chat-composer__add-slot { margin-left: 6px; }
 .chat-composer__island[data-shape='bar'] .chat-composer__primary-trail { margin-right: 6px; }
 .chat-composer__island[data-shape='stack'] .chat-composer__pill {
@@ -603,6 +614,8 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
   onToggleMultitask?: (enabled: boolean) => void
   compactDisabled?: boolean
   contextUsage?: ContextUsagePresentation | null
+  /** 会话过胖小指示（由 ChatPage 组装，放在上下文用量表左侧）。 */
+  sessionSizeWarning?: ReactNode
   workspaceReady?: boolean
   workspaceLocked?: boolean
   workspaceName?: string
@@ -659,7 +672,7 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
     running, aborting, compacting, runPhase, ctfSession, goalMode, goal, executionMode,
     approvalPolicy, approvalLabel, modelKey, automaticModelLabel, compactModelLabel,
     thinkingLevels, thinkingLevel, kernel, kernelLocked, multitask, planModeActive, dshCommands,
-    dshCommandsError, busySend, contextUsage, workspaceReady,
+    dshCommandsError, busySend, contextUsage, sessionSizeWarning, workspaceReady,
     workspaceLocked, workspaceName, workspacePath, gitRepository, gitBranch, gitBranches,
     browserUseReady, computerUseReady, imageHome, imageModelKey, imageModelLabel, imageDrawNotice, imageGroups, availableSkills, importedSkills, selectedMcpServers,
     mcpCatalog, mcpConfigDigest, conversationKey, queuedGuidance,
@@ -2392,16 +2405,21 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
                     ) : null}
                   </>
                 ) : undefined}
-                footerEnd={contextUsage ? (
-                  <ContextUsageMeter
-                    usage={contextUsage}
-                    size="sm"
-                    showLabel={false}
-                    running={parentTurnActive}
-                    compacting={Boolean(compacting)}
-                    onCompactContext={() => props.onRunSlashCommand?.('compact')}
-                    onHandoffContext={() => props.onRunSlashCommand?.('handoff')}
-                  />
+                footerEnd={sessionSizeWarning || contextUsage ? (
+                  <>
+                    {sessionSizeWarning}
+                    {contextUsage ? (
+                      <ContextUsageMeter
+                        usage={contextUsage}
+                        size="sm"
+                        showLabel={false}
+                        running={parentTurnActive}
+                        compacting={Boolean(compacting)}
+                        onCompactContext={() => props.onRunSlashCommand?.('compact')}
+                        onHandoffContext={() => props.onRunSlashCommand?.('handoff')}
+                      />
+                    ) : null}
+                  </>
                 ) : undefined}
                 accessory={(
                   <>
