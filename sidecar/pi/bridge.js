@@ -29,6 +29,7 @@ import {
   stopPiBackgroundTask,
 } from "./reviewed-ts/extensions.js";
 import { dropSendAfterAbort } from "./bridge-abort.js";
+import { withTurnHeartbeat } from "./bridge-turn-heartbeat.js";
 import { installRequestHttpDispatcher } from "./bridge-http-dispatcher.js";
 import { applyRequestBudgetToRuntime } from "./bridge-request-budget-stream.js";
 import {
@@ -2325,7 +2326,11 @@ async function sendMessage(command) {
     if (contract && !controller) {
       throw new Error("MilkSU Coding permission controller is unavailable");
     }
-    await withCodingTurnContract({
+    // A turn that is alive keeps saying so. Without this the renderer cannot tell a busy
+    // engine from one that never picked the turn up, and it would guess "not responding".
+    // The heartbeat only proves the process is alive; it never counts as progress, so a
+    // request that goes silent while the process lives is still reported as stalled.
+    await withTurnHeartbeat({ emit, conversationId }, () => withCodingTurnContract({
       contracts: sessionTurnContracts,
       conversationId,
       contract,
@@ -2343,7 +2348,7 @@ async function sendMessage(command) {
     }, () => session.prompt(
       prompt,
       prepared.images.length ? { images: prepared.images } : undefined,
-    ));
+    )));
     await compactIfContextNearLimit(conversationId, session);
     if (abortedSessions.has(conversationId)) return;
     settled = true;

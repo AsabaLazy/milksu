@@ -1,0 +1,193 @@
+// @vitest-environment jsdom
+// 停滞看门狗 UI 回归：状态判定正确还不够，**界面必须明确呈现**，并给出「重试 / 停止」。
+// 真事（2026-09-29 00:40）：模型请求挂死，界面却一直装活着地转圈，没有任何出口。
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Conversation } from '@/types'
+
+const runtimeStub = {
+  activeProblemTurn: null as unknown,
+  conversations: [] as Conversation[],
+  pendingWorkspaceHome: null as unknown,
+  forceStopConversation: vi.fn(),
+  wakeStuckTurn: vi.fn(async () => true),
+  toggleDshPlanMode: () => undefined,
+  streamStaleSeconds: 0,
+  streamStale: false,
+  activeStallKind: '' as '' | 'engine-gone' | 'model-stalled',
+  store: { subscribe: () => () => undefined, getSnapshot: () => ({}) },
+  setMultitask: () => undefined,
+  selectedMultitask: false,
+  runningConversationIds: [] as string[],
+  dismissProblemTurn: () => undefined,
+  dismissCrossConversationNotice: () => undefined,
+  busySend: false,
+  activeToolRunning: false,
+  activeQueuedBehind: null as string | null,
+  activeId: 'stalled-conversation',
+  activeForceStopReady: false,
+  activeEngineAlive: false,
+  activeCrossConversationNotices: [] as unknown[],
+  abortWorkingItem: () => undefined,
+  abortWorkingAll: () => undefined,
+}
+
+vi.mock('@/stores/conversationsStore', () => ({
+  useConversations: () => runtimeStub,
+  ConversationsProvider: ({ children }: { children: unknown }) => children,
+}))
+
+vi.mock('@/desktop', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/desktop')>()
+  return {
+    ...actual,
+    invokeCommand: () => new Promise(() => undefined),
+    listenEvent: () => Promise.resolve(() => undefined),
+  }
+})
+
+vi.mock('@/modelCatalog', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/modelCatalog')>()
+  return {
+    ...actual,
+    useLiveModelCatalog: () => ({
+      snapshot: { providers: [], relay: null, includeUnconfigured: false },
+      providers: [],
+      providerGroups: [],
+      pickerGroups: [],
+      providerModelLabel: () => '',
+      pickerModelLabel: () => '',
+    }),
+  }
+})
+
+const mountedRoots: Root[] = []
+
+class FakeResizeObserver {
+  constructor(_callback: () => void) {}
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+class FakeIntersectionObserver {
+  constructor(_callback: () => void) {}
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+function stalledConversation(): Conversation {
+  return {
+    id: 'stalled-conversation',
+    title: '卡住的会话',
+    createdAt: 0,
+    messages: [
+      { id: 'u-1', role: 'user', content: '把这件事做完', timestamp: 1 },
+      // 事故的形状：一条空的 assistant 消息卡在那里，之后再无字节。
+      { id: 'a-1', role: 'assistant', content: '', timestamp: 2, status: 'running' },
+    ],
+  }
+}
+
+async function renderChatPage() {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  mountedRoots.push(root)
+  const ChatPage = (await import('@/components/ChatPage')).default
+  const conversation = stalledConversation()
+  runtimeStub.conversations = [conversation]
+  runtimeStub.activeId = conversation.id
+  await act(async () => {
+    root.render(
+      <ChatPage
+        conversation={conversation}
+        settings={null}
+        workspacePath="/tmp/probe"
+        running
+        aborting={false}
+        sessionReady
+        resumed={false}
+        compacting={false}
+        ctfSession={false}
+        ensureConversation={() => conversation.id}
+      />,
+    )
+  })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
+  return host
+}
+
+function clickButton(host: HTMLElement, testid: string) {
+  const button = host.querySelector(`[data-testid="${testid}"]`) as HTMLElement | null
+  expect(button, `expected ${testid} to be rendered`).not.toBeNull()
+  return button as HTMLElement
+}
+
+beforeEach(() => {
+  ;(globalThis as unknown as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  ;(globalThis as unknown as Record<string, unknown>).ResizeObserver = FakeResizeObserver
+  ;(globalThis as unknown as Record<string, unknown>).IntersectionObserver = FakeIntersectionObserver
+  if (typeof CSS === 'undefined') (globalThis as unknown as Record<string, unknown>).CSS = { escape: (value: string) => value }
+  else if (typeof CSS.escape !== 'function') (CSS as unknown as Record<string, unknown>).escape = (value: string) => value
+  runtimeStub.forceStopConversation.mockClear()
+  runtimeStub.wakeStuckTurn.mockClear()
+  runtimeStub.streamStale = true
+  runtimeStub.streamStaleSeconds = 130
+  runtimeStub.activeStallKind = 'model-stalled'
+  runtimeStub.activeToolRunning = false
+  runtimeStub.activeQueuedBehind = null
+})
+
+afterEach(() => {
+  for (const root of mountedRoots.splice(0)) root.unmount()
+  document.body.innerHTML = ''
+})
+
+describe('ChatPage 停滞看门狗呈现', () => {
+  it('shows an explicit stalled banner with the elapsed time and a Retry/Stop exit', async () => {
+    const host = await renderChatPage()
+    const banner = host.querySelector('[data-testid="stream-stale"]')
+    expect(banner).not.toBeNull()
+    // 明确说“已停滞”，而不是继续装活着。
+    expect(banner?.textContent).toContain('已停滞')
+    expect(banner?.textContent).toContain('2m 10.0s')
+    // 两个真实出口都在。
+    expect(host.querySelector('[data-testid="wake-stuck-turn"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="cancel-stuck-turn"]')).not.toBeNull()
+  })
+
+  it('Retry re-dispatches the last unanswered prompt through the runtime', async () => {
+    const host = await renderChatPage()
+    const retry = clickButton(host, 'wake-stuck-turn')
+    await act(async () => { retry.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(runtimeStub.wakeStuckTurn).toHaveBeenCalledWith('stalled-conversation')
+  })
+
+  it('Stop hard-stops the stalled conversation', async () => {
+    const host = await renderChatPage()
+    const stop = clickButton(host, 'cancel-stuck-turn')
+    await act(async () => { stop.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(runtimeStub.forceStopConversation).toHaveBeenCalledWith('stalled-conversation')
+  })
+
+  it('a long-running tool keeps the neutral “tool running” wording instead of stalling', async () => {
+    runtimeStub.activeStallKind = ''
+    runtimeStub.activeToolRunning = true
+    const host = await renderChatPage()
+    const banner = host.querySelector('[data-testid="stream-stale"]')
+    expect(banner).not.toBeNull()
+    expect(banner?.textContent).toContain('工具执行中')
+    expect(host.querySelector('[data-testid="stalled-turn"]')).toBeNull()
+  })
+
+  it('detects the dead process too: engine-gone wording without pretending progress', async () => {
+    runtimeStub.activeStallKind = 'engine-gone'
+    const host = await renderChatPage()
+    const banner = host.querySelector('[data-testid="stream-stale"]')
+    expect(banner?.textContent).toContain('已停滞')
+    expect(banner?.textContent).toContain('心跳已停')
+    expect(host.querySelector('[data-testid="wake-stuck-turn"]')).not.toBeNull()
+  })
+})

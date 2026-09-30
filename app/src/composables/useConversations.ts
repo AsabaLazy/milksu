@@ -82,6 +82,7 @@ import {
 } from '@/lib/workingRoster'
 import { modelContextWindowOverride, resolveModelContextWindow } from '@/lib/knownContextWindow'
 import { installedModelContextWindows } from '@/modelCatalog'
+import { decideTurnStall, resolveTurnStallConfig, type TurnStallKind } from '@/lib/turnStall'
 import { MODEL_THINKING_LEVELS } from '@/lib/modelThinking'
 import {
   applySessionCompacting,
@@ -992,6 +993,8 @@ type ConversationsState = {
   engineNoticeAt: number
   abortStalledIds: Set<string>
   stalledQueueIds: Set<string>
+  runningTools: Map<string, Set<string>>
+  heartbeatTick: number
   continuity: CodingContinuityState
   turnStatusById: Map<string, SessionTurnSnapshot>
   conversationActionError: string
@@ -1041,6 +1044,8 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
     engineNoticeAt: 0,
     abortStalledIds: new Set<string>(),
     stalledQueueIds: new Set<string>(),
+    runningTools: new Map<string, Set<string>>(),
+    heartbeatTick: 0,
     continuity: createCodingContinuityState(),
     turnStatusById: new Map<string, SessionTurnSnapshot>(),
     conversationActionError: '',
@@ -1114,6 +1119,10 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
     set continuity(value) { store.setState({ continuity: value }) },
     get turnStatusById() { return store.getState().turnStatusById },
     set turnStatusById(value) { store.setState({ turnStatusById: value }) },
+    get runningTools() { return store.getState().runningTools },
+    set runningTools(value) { store.setState({ runningTools: value }) },
+    get heartbeatTick() { return store.getState().heartbeatTick },
+    set heartbeatTick(value) { store.setState({ heartbeatTick: value }) },
     get conversationActionError() { return store.getState().conversationActionError },
     set conversationActionError(value) { store.setState({ conversationActionError: value }) },
     get pendingComposerDraft() { return store.getState().pendingComposerDraft },
@@ -1210,6 +1219,100 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
     abortWatchdogs.set(id, timer)
   }
 
+  /**
+   * 最后一条“问了但没答上”的用户消息。引擎没接住的那一轮仍然有它——“重试”重新派发的就是它。
+   * 空的 assistant 消息（死在写任何东西之前）会被跳过，这正是事故的形状。
+   */
+  function lastUnansweredPrompt(conversationId: string): string {
+    const conversation = s.conversations.find(item => item.id === conversationId)
+    if (!conversation) return ''
+    for (let index = conversation.messages.length - 1; index >= 0; index -= 1) {
+      const message = conversation.messages[index]
+      if (!message) continue
+      if (message.role === 'assistant' && String(message.content ?? '').trim()) return ''
+      if (message.role === 'user' && String(message.content ?? '').trim()) {
+        return String(message.content).trim()
+      }
+    }
+    return ''
+  }
+
+  /**
+   * 重试一个已停滞的回合：先把这个卡住的回合从路上拿走，再把最后一条没被回答的用户消息
+   * 走正常后端路径重发一遍。**本地结算先发生**，所以即使 sidecar 永远不回应 abort，界面也
+   * 会离开“停滞”状态。派发成功返回 true；没有东西可重发返回 false。
+   */
+  async function wakeStuckTurn(conversationId: string): Promise<boolean> {
+    const id = String(conversationId ?? '').trim()
+    if (!id) return false
+    const prompt = lastUnansweredPrompt(id)
+    if (!prompt) return false
+    try {
+      await invokeCommand('abort_message', { conversationId: id })
+    } catch {
+      // 尽力而为：下面的本地结算无论如何都要发生。
+    }
+    finishRun(id)
+    clearAbortStalled(id)
+    markQueueStalled(id, false)
+    activeTurnPolicies.delete(id)
+    noteStreamEvent(id)
+    s.runningIds = new Set(s.runningIds).add(id)
+    patchTurnStatus(id, state => applySessionRunStarted(state))
+    try {
+      await invokeRuntimeTurn(id, {
+        prompt,
+        attachments: [],
+      })
+      return true
+    } catch (reason) {
+      finishRun(id)
+      update(id, conversation => ({
+        ...conversation,
+        messages: [...conversation.messages, {
+          id: crypto.randomUUID(),
+          role: 'assistant' as const,
+          content: t(`重试未启动：${agentRuntimeErrorMessage(reason)}`, `Retry did not start: ${agentRuntimeErrorMessage(reason)}`),
+          timestamp: Date.now(),
+          status: 'done' as const,
+        }],
+      }))
+      return false
+    }
+  }
+
+  /**
+   * 停滞回合的「停止」：引擎可能已经死了、永远不回应 abort，
+   * 所以先本地结算（工具消息收尾、补一条系统说明、离开 running），再尽力通知引擎。
+   */
+  async function forceStopConversation(id: string) {
+    finishRun(id)
+    clearAbortStalled(id)
+    activeTurnPolicies.delete(id)
+    markQueueStalled(id, false)
+    update(id, conversation => ({
+      ...conversation,
+      messages: [
+        ...settleRunningToolMessages(withoutBlankAssistantMessages(conversation.messages)),
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant' as const,
+          content: t(
+            '本轮已强制停止（引擎未确认）',
+            'This turn was force-stopped (the engine never confirmed)',
+          ),
+          timestamp: Date.now(),
+          status: 'done' as const,
+        },
+      ],
+    }))
+    try {
+      await invokeCommand('abort_message', { conversationId: id })
+    } catch {
+      // 尽力而为：本地结算已经发生。
+    }
+  }
+
   function markQueueStalled(id: string, stalled: boolean) {
     if (s.stalledQueueIds.has(id) === stalled) return
     const next = new Set(s.stalledQueueIds)
@@ -1247,6 +1350,124 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
   const activeQueuedGuidanceStalled = (() => (
     s.activeId ? s.stalledQueueIds.has(s.activeId) : false
   ))
+
+  // ---- 存活与卡住指示（搬运自本地分支）----
+  // 以前界面只能从“安静”推出“引擎没响应”，于是一个长时间的工具或慢模型调用就被读成
+  // “连接掉了”。现在分开两件事：事件=有进展；心跳=引擎还在，但不是进展。
+  // 阈值集中在一处（app/src/lib/turnStall.ts），这里只读一次快照。
+  const TURN_STALL = resolveTurnStallConfig()
+  const lastStreamEventByConversation = new Map<string, number>()
+  const heartbeatAtByConversation = new Map<string, number>()
+  function noteStreamEvent(conversationId: string, at = Date.now()) {
+    if (conversationId) lastStreamEventByConversation.set(conversationId, at)
+  }
+  function noteTurnHeartbeat(conversationId: string | undefined, at = Date.now()) {
+    if (!conversationId) return
+    heartbeatAtByConversation.set(conversationId, at)
+    s.heartbeatTick = s.heartbeatTick + 1
+  }
+  function noteToolRunning(
+    conversationId: string | undefined,
+    toolCallId?: string,
+    _toolName?: string,
+    running = true,
+  ) {
+    if (!conversationId) return
+    const key = String(toolCallId ?? '')
+    if (!key) return
+    const next = new Map(s.runningTools)
+    const current = new Set(next.get(conversationId) ?? [])
+    if (running) current.add(key)
+    else current.delete(key)
+    if (current.size) next.set(conversationId, current)
+    else next.delete(conversationId)
+    s.runningTools = next
+  }
+  function lastEventForConversation(conversationId: string | null) {
+    if (!conversationId) return 0
+    return lastStreamEventByConversation.get(conversationId) ?? 0
+  }
+  // 这三个在渲染时用 Date.now() 求值：重渲染的节奏由页面上已有的“每秒时钟”驱动，
+  // 不在 store 里再造一个时钟。
+  const streamStale = (() => {
+    const conversationId = s.activeId
+    if (!conversationId || !s.runningIds.has(conversationId)) return false
+    const last = lastEventForConversation(conversationId)
+    return last > 0 && Date.now() - last >= TURN_STALL.quietMs
+  })
+  const streamStaleSeconds = (() => {
+    const last = lastEventForConversation(s.activeId)
+    return last > 0 ? Math.max(0, Math.floor((Date.now() - last) / 1000)) : 0
+  })
+  const activeToolRunning = (() => {
+    const id = s.activeId
+    return Boolean(id && (s.runningTools.get(id)?.size ?? 0) > 0)
+  })
+  const activeEngineAlive = (() => {
+    const id = s.activeId
+    if (!id) return false
+    // Read the tick so a heartbeat re-renders the wording even without other events.
+    void s.heartbeatTick
+    const at = heartbeatAtByConversation.get(id) ?? 0
+    return at > 0 && Date.now() - at < TURN_STALL.heartbeatGraceMs
+  })
+
+  // ---- E 队列可见性（搬运自本地分支）----
+  // 一个 sidecar 是每 (内核, 工作区) 一个进程：两个对话共用同一个 sidecar 就不能同时跑回合，
+  // 后到的那个是在排队——那不是“连接丢了”。
+  function sidecarKeyOf(conversation: Conversation): string {
+    const workspace = String(conversation.workspacePath ?? '').trim().replace(/\/+$/, '')
+    if (!workspace) return ''
+    return `${normalizeAgentKernel(conversation.kernel)}\u0000${workspace}`
+  }
+  // 引擎真的开始答这个对话派发的回合了：至少有一个事件落在 runStartedAt 之后。
+  // 派发了但还没有事件，就是还在等 sidecar —— 排队的特征。
+  function turnOwnsSidecar(conversationId: string): boolean {
+    const startedAt = s.turnStatusById.get(conversationId)?.runStartedAt
+    if (startedAt === undefined) return false
+    return lastEventForConversation(conversationId) > startedAt
+  }
+  // 正在占着这个对话的 sidecar 的兄弟对话。只有“真的在产生事件”的兄弟才算：
+  // 光有一个 running 标记可能是本地过时的猜测。
+  function engineHolderFor(conversationId: string): Conversation | null {
+    const conversation = s.conversations.find(item => item.id === conversationId)
+    if (!conversation) return null
+    const key = sidecarKeyOf(conversation)
+    if (!key) return null
+    return s.conversations.find(other => (
+      other.id !== conversationId
+      && s.runningIds.has(other.id)
+      && sidecarKeyOf(other) === key
+      && turnOwnsSidecar(other.id)
+    )) ?? null
+  }
+  // 当前对话排在谁后面；不在排队时为空串。
+  const activeQueuedBehind = (() => {
+    const id = s.activeId
+    if (!id || !s.runningIds.has(id)) return ''
+    if (turnOwnsSidecar(id)) return ''
+    const holder = engineHolderFor(id)
+    if (!holder) return ''
+    return String(holder.title ?? '').trim() || holder.id
+  })
+  // ---- 停滞看门狗 ----
+  // 判定链：进展时钟（最后一次引擎事件到现在的静默）> 有没有工具在跑 > 有没有在排队 >
+  // 心跳是否还在。心跳只决定“进程还在吗”，不把停滞时钟清零——否则连接死了但进程还在
+  // 的那种死法永远报不出来。具体阈值与纯函数在 @/lib/turnStall。
+  const activeStallKind = ((): TurnStallKind => {
+    const id = s.activeId
+    if (!id) return ''
+    const last = lastEventForConversation(id)
+    return decideTurnStall({
+      running: s.runningIds.has(id),
+      toolRunning: activeToolRunning(),
+      queuedBehind: Boolean(activeQueuedBehind()),
+      engineAlive: activeEngineAlive(),
+      quietMs: last > 0 ? Date.now() - last : 0,
+      hasEvent: last > 0,
+      config: TURN_STALL,
+    })
+  })
   const activeResumed = (() => (
     s.activeId ? s.continuity.resumed.has(s.activeId) : false
   ))
@@ -3080,6 +3301,20 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
         contextComposition,
         sessions,
       } = event.payload
+      // 任何事件都证明这个对话的流又活了——但心跳除外：
+      // 心跳只是“引擎还在”，不是“有进展”。
+      if (type !== 'turn.heartbeat') {
+        noteStreamEvent(String(sessionId ?? '') || String(s.activeId ?? ''))
+      }
+      if (type === 'turn.heartbeat') {
+        noteTurnHeartbeat(sessionId)
+        return
+      }
+      if (type === 'tool.started' || type === 'tool.progress') {
+        noteToolRunning(sessionId, toolCallId, toolName, true)
+      } else if (type === 'tool.completed') {
+        noteToolRunning(sessionId, toolCallId, toolName, false)
+      }
       if (!sessionId && (type === 'engine.stopped' || type === 'engine.protocol_error')) {
         // Scope the stop to the sessions the stopped engine instance actually
         // served. Without that identity there is nothing safe to notify: a
@@ -3736,6 +3971,14 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
     get activeAbortStalled() { return activeAbortStalled() },
     get activeMessageQueue() { return activeMessageQueue() },
     get activeQueuedGuidanceStalled() { return activeQueuedGuidanceStalled() },
+    get streamStale() { return streamStale() },
+    get streamStaleSeconds() { return streamStaleSeconds() },
+    get activeToolRunning() { return activeToolRunning() },
+    get activeEngineAlive() { return activeEngineAlive() },
+    get activeQueuedBehind() { return activeQueuedBehind() },
+    get activeStallKind() { return activeStallKind() },
+    forceStopConversation,
+    wakeStuckTurn,
     get engineNotice() { return s.engineNotice },
     get engineNoticeRepeat() { return s.engineNoticeRepeat },
     get busySend() { return s.busySend },

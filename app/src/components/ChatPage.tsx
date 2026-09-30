@@ -1144,6 +1144,37 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   const waitingElapsed = waitingStartedAt == null
     ? ''
     : formatDemoElapsed(Math.max(0, waitingNow - waitingStartedAt))
+  // ---- 搬运自本地分支：诚实文案 ----
+  // “事件=有进展”与“心跳=引擎还在”是两件事。以前只看安静，于是长工具/慢模型都被读成
+  // “连接掉了”；现在分开，并且只有“安静 + 没有工具在跑 + 引擎心跳也没了”才说引擎没响应。
+  const streamStale = conversations.streamStale
+  const streamStaleSeconds = conversations.streamStaleSeconds
+  const runningToolActive = conversations.activeToolRunning
+  // E 队列可见性：当前对话排在谁后面（空串=没排队）。
+  const queuedBehindLabel = conversations.activeQueuedBehind
+  // 停滞看门狗：阈值与纯判定都在 composable/@/lib/turnStall，这里只负责呈现与动作。
+  // engine-gone = 心跳已停（进程大概率没了）；model-stalled = 心跳还在但请求静默太久。
+  // 两种都不再继续装活着，而是给“重试 / 停止”的真实出口。
+  const stallKind = conversations.activeStallKind
+  const stalled = stallKind === 'engine-gone' || stallKind === 'model-stalled'
+  const stalledElapsed = formatDemoElapsed(streamStaleSeconds * 1000)
+  /** “等待”必须说清在等什么；无声地计数就是在说“模型正在回复”——那和连接断了一模一样。 */
+  const waitingLabel = (() => {
+    // 排在同一个 sidecar 的另一个对话后面是「排队」，不是「停滞」：
+    // 在这里说“连接丢了”就是横幅以前撒的那个谎。
+    if (queuedBehindLabel) {
+      return t('排队中（同工作区另一个会话在跑）', 'Queued (another conversation in this workspace is running)')
+    }
+    // 工具正在跑就直说：引擎这时候正在干活，说成“等待引擎响应”是假话。
+    if (runningToolActive) return t('工具执行中…', 'Tool running…')
+    if (stalled) {
+      return stallKind === 'model-stalled'
+        ? t('模型请求已停滞…', 'The model request has stalled…')
+        : t('引擎没有响应…', 'The engine is not responding…')
+    }
+    if (streamStale) return t('等待中…', 'Waiting…')
+    return t('等待引擎响应…', 'Waiting for the engine…')
+  })()
   const latestJudge = ctfProjection?.judgeReceipts.at(-1)
   const contextPanelTitle = ({
     domain: ctfSession ? t('CTF 领域上下文', 'CTF domain context') : vulnerabilitySession ? t('CVE 领域上下文', 'CVE domain context') : t('领域上下文', 'Domain context'),
@@ -2999,6 +3030,65 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
             className="chat-edge-scroll absolute inset-0 overflow-x-hidden overflow-y-auto"
             onScroll={handleChatScroll}
           >
+            {streamStale || queuedBehindLabel ? (
+              <div
+                className={cn(
+                  'mx-auto mb-2 w-[72%] rounded-xl border px-3 py-1.5 text-caption',
+                  stalled
+                    ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                    : 'border-border/70 bg-muted/50 text-muted-foreground',
+                )}
+                data-testid="stream-stale"
+              >
+                {queuedBehindLabel ? (
+                  <span data-testid="queued-behind">
+                    {t(
+                      `排队中：同工作区「${queuedBehindLabel}」正在运行。`,
+                      `Queued: "${queuedBehindLabel}" in this workspace is running.`,
+                    )}
+                  </span>
+                ) : runningToolActive ? (
+                  t(
+                    `工具执行中…（已 ${streamStaleSeconds}s 无输出）`,
+                    `Tool running… (${streamStaleSeconds}s without output)`,
+                  )
+                ) : stalled ? (
+                  <span className="flex flex-wrap items-center gap-2" data-testid="stalled-turn">
+                    <span data-testid="stalled-turn-label">
+                      {stallKind === 'model-stalled'
+                        ? t(
+                            `已停滞 ${stalledElapsed}：模型请求没有再输出，引擎进程还在。`,
+                            `Stalled for ${stalledElapsed}: the model request stopped producing output while the engine process is still alive.`,
+                          )
+                        : t(
+                            `已停滞 ${stalledElapsed}：引擎进程的心跳已停。`,
+                            `Stalled for ${stalledElapsed}: the engine process stopped sending heartbeats.`,
+                          )}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      data-testid="wake-stuck-turn"
+                      onClick={() => void conversations.wakeStuckTurn(conversation?.id ?? '')}
+                    >
+                      {t('重试', 'Retry')}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      data-testid="cancel-stuck-turn"
+                      onClick={() => void conversations.forceStopConversation(conversation?.id ?? '')}
+                    >
+                      {t('停止', 'Stop')}
+                    </Button>
+                  </span>
+                ) : (
+                  t(`等待中（已 ${streamStaleSeconds}s）`, `Waiting… (${streamStaleSeconds}s)`)
+                )}
+              </div>
+            ) : null}
             {engineNotice ? (
               <div
                 className="mx-auto mb-2 w-[72%] rounded-xl border border-border/70 bg-muted/50 px-3 py-1.5 text-caption text-muted-foreground"
@@ -3144,7 +3234,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                 {waitingForModel && !compacting ? (
                   <p className="chat-model-loading">
                     <AgentLiveStatus
-                      label={t('模型回复中', 'Model is replying')}
+                      label={waitingLabel}
                       elapsed={waitingElapsed}
                     />
                   </p>

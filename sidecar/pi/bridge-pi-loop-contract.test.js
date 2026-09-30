@@ -74,3 +74,18 @@ test("tool results are bound through Pi's tool_result hook after MCP", () => {
   assert.ok(boundIndex > mcpIndex);
   assert.ok(boundIndex > yieldIndex);
 });
+
+// 事故：一次上游合并把 bridge.js 的心跳接线整段吞了，之后 sidecar 再不发 turn.heartbeat，
+// 渲染层无法区分“忙”与“死”，于是僵尸转圈没人管。这条契约卡住“有没有真的接上”。
+test("the sidecar emits a turn heartbeat around the model request", () => {
+  assert.match(
+    bridgeSource,
+    /import \{ withTurnHeartbeat \} from "\.\/bridge-turn-heartbeat\.js"/,
+  );
+  assert.match(bridgeSource, /withTurnHeartbeat\(\{ emit, conversationId \}/);
+  // 必须包在真正的模型请求外面，而不是某个无关分支里。
+  const heartbeatIndex = bridgeSource.indexOf("withTurnHeartbeat({ emit, conversationId }");
+  const promptIndex = bridgeSource.indexOf("session.prompt(", heartbeatIndex);
+  assert.ok(heartbeatIndex > 0);
+  assert.ok(promptIndex > heartbeatIndex);
+});
