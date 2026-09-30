@@ -1158,6 +1158,19 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   const stallKind = conversations.activeStallKind
   const stalled = stallKind === 'engine-gone' || stallKind === 'model-stalled'
   const stalledElapsed = formatDemoElapsed(streamStaleSeconds * 1000)
+  // 停滞进入边沿：从“没停滞”变成停滞的那一刻发一条系统通知（重试还是停止）。
+  // 依赖只有 stalled 翻转 + 会话切换 ⇒ 每秒重渲染不会重复发；
+  // 去重再兜一层：composable 按 会话+回合起点 记账（重入/StrictMode 也不会重复投递）。
+  useEffect(() => {
+    if (!stalled) return
+    conversations.notifyTurnStall?.({
+      conversationId: conversation?.id ?? '',
+      stallKind,
+      quietMs: streamStaleSeconds * 1000,
+    })
+    // 时长等每秒变化的值故意不进依赖：它们不属于“进入停滞”这个事件。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stalled, conversation?.id])
   /** “等待”必须说清在等什么；无声地计数就是在说“模型正在回复”——那和连接断了一模一样。 */
   const waitingLabel = (() => {
     // 排在同一个 sidecar 的另一个对话后面是「排队」，不是「停滞」：

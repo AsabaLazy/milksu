@@ -49,6 +49,7 @@ import { applyUiLocale } from '@/lib/uiLocale'
 import { applyConversationFontSize } from '@/lib/uiFonts'
 import { applyProjectFoldLimit } from '@/lib/projectFoldLimit'
 import { applyUiEmphasis } from '@/lib/uiEmphasis'
+import { taskNotifySwitchFromSettings } from '@/lib/taskNotifyBridge'
 import { useT } from '@/hooks/useUiLocale'
 import { useStore, useStoreRuntime } from '@/lib/reactStore'
 import { cn } from '@/lib/cn'
@@ -206,11 +207,19 @@ export default function App() {
   const t = useT()
   const rendererSurface = readRendererSurface()
   const restoredViewState = useRef(readWorkspaceViewState()).current
+  // 任务通知开关的现读镜像。
+  // 不传快照：通知在状态变化时才触发，而 useConversations 在 settings 声明之前就创建好了。
+  const taskNotifyRef = useRef<{ needsInput: boolean; failed: boolean; completed: boolean; stalled?: boolean; sound?: boolean } | undefined>(undefined)
   const openPluginSettingsOnStartup = useRef(
     typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('open-settings') === 'plugins',
   ).current
   const conversations = useConversations()
+  // 把“现读设置”的函数注进运行时（Provider 在 main.tsx 里创建运行时，App 是它的子组件 ⇒ 只能用注入）。
+  useEffect(() => {
+    // 测试里 Provider 可能被换成假的运行时 ⇒ 这个方法可能不存在，所以“有才调” ✓。
+    conversations.setTaskNotifySource?.(() => taskNotifyRef.current)
+  }, [conversations])
   const vulnerabilityDashboard = useStoreRuntime(useVulnerabilityDashboard)
   const labJobs = useLabJobs()
   useStore(labJobs.store)
@@ -507,6 +516,7 @@ export default function App() {
   function applySettings(value: AppSettings) {
     const normalized = withAppSettingsDefaults(value)
     setSettings(normalized)
+    taskNotifyRef.current = taskNotifySwitchFromSettings(normalized)
     installAppModelSettings(normalized)
     applyUiLocale(normalized.locale)
     applyConversationFontSize(normalized.conversation_font_size)

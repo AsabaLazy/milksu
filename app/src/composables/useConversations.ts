@@ -83,6 +83,14 @@ import {
 import { modelContextWindowOverride, resolveModelContextWindow } from '@/lib/knownContextWindow'
 import { installedModelContextWindows } from '@/modelCatalog'
 import { decideTurnStall, resolveTurnStallConfig, type TurnStallKind } from '@/lib/turnStall'
+import {
+  completedNotifyKey,
+  defaultTaskNotifySwitch,
+  isAlreadySameProblem,
+  notifyTaskIfNeeded,
+  planProblemNotify,
+  turnStallNotifySummary,
+} from '@/lib/taskNotifyBridge'
 import { MODEL_THINKING_LEVELS } from '@/lib/modelThinking'
 import {
   applySessionCompacting,
@@ -1017,7 +1025,17 @@ type ParkedPendingCanvas = {
   mcpConfigDigest: string
 }
 
-export function createConversationsRuntime(options?: { live?: boolean }) {
+// 任务通知开关的现读槽位：由 App 在挂载后注入（运行时读 ⇒ 改开关即时生效 ✓）。
+let taskNotifySource: (() => { needsInput: boolean; failed: boolean; completed: boolean; stalled?: boolean; sound?: boolean } | undefined) | undefined
+
+export function createConversationsRuntime(options?: {
+  live?: boolean
+  /**
+   * 现读任务通知开关（**运行时**读，不用快照 ✗ —— 通知是状态变化时才触发的，
+   * 快照会过期）。返回 undefined ⇒ 用默认 开/开/关。
+   */
+  readTaskNotify?: () => { needsInput: boolean; failed: boolean; completed: boolean; stalled?: boolean; sound?: boolean } | undefined
+}) {
   const store = createStore<ConversationsState>({
     conversations: [],
     activeId: null,
@@ -1365,6 +1383,133 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
     if (!conversationId) return
     heartbeatAtByConversation.set(conversationId, at)
     s.heartbeatTick = s.heartbeatTick + 1
+  }
+
+  // ---- 任务通知（桌面系统通知）----
+  // 该不该发、发哪一类的判定全部在 app/src/lib/taskNotifyTrigger.ts / taskNotifyBridge.ts 的
+  // 纯函数里；这里只做三件事：在状态变化处调用、现读开关、记去重键。不轮询 ✗。
+
+  /** 失败 / 完成的通知去重（第二层；第一层是状态跃迁判据）。 */
+  const notifiedProblems = new Set<string>()
+
+  /** 已通知过的"停滞"（键含会话 + 回合起点 ⇒ 同一回合里持续停滞只发一次 ✓，重试后的新回合是新键 ⇒ 会再发 ✓）。 */
+  const notifiedStalls = new Set<string>()
+
+  /** 每个会话最近一次失败的内容：判"同一份失败重复投递"用（代替本线的问题标记机制）。 */
+  const failedNoticeByConversation = new Map<string, string>()
+
+  /** 本回合没干净跑完（engine.error 来过，含读者主动中止）⇒ 完成通知要跳过这个回合。 */
+  const turnNotCleanIds = new Set<string>()
+
+  /**
+   * 进入停滞态（engine-gone / model-stalled）**边沿**时发一条**第四类 stalled**通知：
+   * 语义是“系统告警：模型疑似挂死，可重试或停止”，与 needs-decision（等你拍板）**目的不同**，
+   * 因此单配开关（task_notify.stalled，默认关），不复用 needs_input。
+   * 管道复用现成的 NotifyTask（前台压制、防抖不变），不另造一套 ✗。
+   *
+   * 去重按 **会话 + 回合起点**（runStartedAt）落在本地：调用方可以在停滞翻转那一刻调用，
+   * 持续停滞里反复调用也不会重复投递；重试/新回合换了 runStartedAt ⇒ 新事件照发 ✓。
+   */
+  function notifyTurnStall(input: {
+    conversationId?: string
+    stallKind?: TurnStallKind
+    quietMs?: number
+  }): void {
+    const conversationId = String(input?.conversationId ?? '').trim()
+    const stallKind = input?.stallKind
+    if (!conversationId) return
+    if (stallKind !== 'engine-gone' && stallKind !== 'model-stalled') return
+    const runStartedAt = s.turnStatusById.get(conversationId)?.runStartedAt
+    const key = `${conversationId}:stall:${runStartedAt ?? 0}`
+    if (notifiedStalls.has(key)) return
+    notifiedStalls.add(key)
+    const title = s.conversations.find(item => item.id === conversationId)?.title ?? ''
+    notifyTaskIfNeeded(
+      {
+        // 停滞不是审批卡，也不是“等你拍板”：显式点名第四类 stalled（有自己的开关）。
+        stalled: true,
+        conversation: { id: conversationId, title },
+        enabled: taskNotifySource?.() ?? defaultTaskNotifySwitch(),
+      },
+      {
+        invoke: (method, args) => (
+          window as unknown as {
+            milksu?: { invoke?: (method: string, args: Record<string, unknown>) => unknown }
+          }
+        ).milksu?.invoke?.(method, args),
+        summary: turnStallNotifySummary(stallKind, Number(input?.quietMs) || 0),
+        // 与本地去重键里的 runStartedAt 同源 ⇒ 外壳键与渲染层键一致（重入不会因值不同而被放行）。
+        turnKey: runStartedAt ?? 0,
+      },
+    )
+  }
+
+  function notifyTerminalTurn(input: {
+    conversationId: string
+    turn: 'failed' | 'completed'
+    /** 缺省时由桥接层按类型给读者语言的默认摘要 ✓ */
+    summary?: string
+    at: number
+    key: string
+  }) {
+    const conversationId = String(input?.conversationId ?? '').trim()
+    if (!conversationId) return
+    if (notifiedProblems.has(input.key)) return
+    notifiedProblems.add(input.key)
+    const title = s.conversations.find(item => item.id === conversationId)?.title ?? ''
+    notifyTaskIfNeeded(
+      {
+        turn: input.turn,
+        // 终态事件：不要被“等你拍板”盖成 needs-input（那会让“失败”弹成“等你拍板”）。
+        terminalEvent: true,
+        conversation: { id: conversationId, title },
+        enabled: taskNotifySource?.() ?? defaultTaskNotifySwitch(),
+      },
+      {
+        invoke: (method, args) => (
+          window as unknown as {
+            milksu?: { invoke?: (method: string, args: Record<string, unknown>) => unknown }
+          }
+        ).milksu?.invoke?.(method, args),
+        summary: input.summary,
+        turnKey: input.at,
+      },
+    )
+  }
+
+  /** 运行失败：判据（alreadySameProblem）必须由调用方在**写之前**读好再传进来。 */
+  function notifyRunFailure(input: { conversationId: string, alreadySameProblem: boolean }) {
+    const at = Date.now()
+    const plan = planProblemNotify({
+      conversationId: input.conversationId,
+      alreadySameProblem: input.alreadySameProblem,
+      source: 'run-failure',
+      at,
+      seen: notifiedProblems,
+    })
+    if (!plan.notify) {
+      notifiedProblems.add(plan.key)
+      return
+    }
+    notifyTerminalTurn({
+      conversationId: input.conversationId,
+      turn: 'failed',
+      summary: t('任务被异常终止', 'Task terminated unexpectedly'),
+      at,
+      key: plan.key,
+    })
+  }
+
+  /** 回合完成：只在“干净跑完”时调（失败 / 被中止有各自的路径与开关）。 */
+  function notifyCompletedTurn(conversationId: string) {
+    const at = Date.now()
+    notifyTerminalTurn({
+      conversationId,
+      turn: 'completed',
+      summary: t('任务已完成', 'Task finished'),
+      at,
+      key: completedNotifyKey(conversationId, at),
+    })
   }
   function noteToolRunning(
     conversationId: string | undefined,
@@ -3626,6 +3771,8 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
           })
         } else if (type === 'assistant.started') {
           s.runningIds = new Set(s.runningIds).add(sessionId)
+          // 新回合开始 ⇒ 上一回合的"没干净跑完"标记翻篇（完成通知按回合判）。
+          turnNotCleanIds.delete(String(sessionId ?? '').trim())
           patchTurnStatus(sessionId, state => (
             state.runStartedAt === undefined
               ? applySessionRunStarted(state)
@@ -3649,6 +3796,23 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
               ? { purpose: justification.purpose, safety: justification.safety }
               : undefined,
           })
+          // 审批卡到了 ⇒ 这个会话在等读者拍板：发一条 needs-input 系统通知。
+          // 去重由外壳侧负责 ✓，这里不写第二套 ✗；这是状态变化处的一次调用，不轮询 ✗。
+          notifyTaskIfNeeded(
+            {
+              conversation: { id: sessionId, title: conversation?.title, messages },
+              // 开关来自设置（现读 ✗ 快照）：读不到就回落默认，不抛 ✗。
+              // 来源由外壳注入（setTaskNotifySource）；没有注入时用默认。
+              enabled: taskNotifySource?.() ?? defaultTaskNotifySwitch(),
+            },
+            {
+              invoke: (method, args) => (
+                window as unknown as {
+                  milksu?: { invoke?: (method: string, args: Record<string, unknown>) => unknown }
+                }
+              ).milksu?.invoke?.(method, args),
+            },
+          )
         } else if (type === 'approval.resolved' && requestId) {
           const approvalIndex = messages.findIndex(message => (
             message.approvalRequestId === requestId
@@ -3783,6 +3947,12 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
             markQueueStalled(sessionId, false)
           }
           finishRun(sessionId)
+          // 回合干净跑完 ⇒ 「任务已完成」通知（走 completed 开关，**默认关** ⇒ 默认不打扰）。
+          // 失败/中止的回合已由 engine.error 路径标记 ⇒ 这里跳过，同一回合不报两次。
+          const settledConversationId = String(sessionId ?? '').trim()
+          if (settledConversationId && !turnNotCleanIds.has(settledConversationId)) {
+            notifyCompletedTurn(settledConversationId)
+          }
         } else if (type === 'tool.started' || type === 'tool.completed') {
           const toolText = type === 'tool.completed'
             ? agentToolResultMessage(text, error)
@@ -3860,6 +4030,18 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
             source: failedSource,
             message: String(message ?? '').trim(),
           })
+          // 任何 engine.error（含读者主动中止）⇒ 本回合不算干净跑完，完成通知要跳过它。
+          turnNotCleanIds.add(String(sessionId ?? '').trim())
+          if (!bubble.stopped) {
+            // 运行失败 = 没能继续 ⇒ 失败类通知（读者主动停下不算失败 ✗）。
+            const problemId = String(sessionId ?? '').trim()
+            // 判据必须在**写之前**读：同一份失败内容重复投递（引擎重发）不再打扰；
+            // 内容不同的新失败必须照发。
+            const existingNotice = failedNoticeByConversation.get(problemId)
+            const alreadySameProblem = isAlreadySameProblem({ existing: existingNotice ? { notice: existingNotice } : undefined, notice: bubble.content })
+            failedNoticeByConversation.set(problemId, bubble.content)
+            notifyRunFailure({ conversationId: problemId, alreadySameProblem })
+          }
           for (let index = 0; index < messages.length; index++) {
             if (messages[index].approvalState === 'pending') {
               messages[index] = {
@@ -4045,12 +4227,22 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
     consumeComposerDraft,
     flushPendingSaves,
     prepareConversationsForUpdateRestart,
+    notifyTurnStall,
+    /**
+     * App 挂载后把“现读设置”的函数注进来（运行时读 ⇒ 读者改开关即时生效 ✓）。
+     * 不传快照、不新开全局状态：只在运行时里留一个槽位 ✓。
+     */
+    setTaskNotifySource: (source?: () => { needsInput: boolean; failed: boolean; completed: boolean; stalled?: boolean; sound?: boolean } | undefined) => {
+      taskNotifySource = source
+    },
   }
 }
 
 
-export function useConversations() {
-  return createConversationsRuntime()
+export function useConversations(
+  readTaskNotify?: () => { needsInput: boolean; failed: boolean; completed: boolean; stalled?: boolean; sound?: boolean } | undefined,
+) {
+  return createConversationsRuntime({ readTaskNotify })
 }
 
 export type ConversationsRuntime = ReturnType<typeof createConversationsRuntime>

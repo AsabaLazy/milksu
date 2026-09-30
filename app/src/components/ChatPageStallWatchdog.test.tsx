@@ -12,6 +12,7 @@ const runtimeStub = {
   pendingWorkspaceHome: null as unknown,
   forceStopConversation: vi.fn(),
   wakeStuckTurn: vi.fn(async () => true),
+  notifyTurnStall: vi.fn(),
   toggleDshPlanMode: () => undefined,
   streamStaleSeconds: 0,
   streamStale: false,
@@ -99,24 +100,25 @@ async function renderChatPage() {
   const conversation = stalledConversation()
   runtimeStub.conversations = [conversation]
   runtimeStub.activeId = conversation.id
+  const element = (
+    <ChatPage
+      conversation={conversation}
+      settings={null}
+      workspacePath="/tmp/probe"
+      running
+      aborting={false}
+      sessionReady
+      resumed={false}
+      compacting={false}
+      ctfSession={false}
+      ensureConversation={() => conversation.id}
+    />
+  )
   await act(async () => {
-    root.render(
-      <ChatPage
-        conversation={conversation}
-        settings={null}
-        workspacePath="/tmp/probe"
-        running
-        aborting={false}
-        sessionReady
-        resumed={false}
-        compacting={false}
-        ctfSession={false}
-        ensureConversation={() => conversation.id}
-      />,
-    )
+    root.render(element)
   })
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
-  return host
+  return { host, root, element }
 }
 
 function clickButton(host: HTMLElement, testid: string) {
@@ -133,6 +135,7 @@ beforeEach(() => {
   else if (typeof CSS.escape !== 'function') (CSS as unknown as Record<string, unknown>).escape = (value: string) => value
   runtimeStub.forceStopConversation.mockClear()
   runtimeStub.wakeStuckTurn.mockClear()
+  runtimeStub.notifyTurnStall.mockClear()
   runtimeStub.streamStale = true
   runtimeStub.streamStaleSeconds = 130
   runtimeStub.activeStallKind = 'model-stalled'
@@ -147,7 +150,7 @@ afterEach(() => {
 
 describe('ChatPage 停滞看门狗呈现', () => {
   it('shows an explicit stalled banner with the elapsed time and a Retry/Stop exit', async () => {
-    const host = await renderChatPage()
+    const { host } = await renderChatPage()
     const banner = host.querySelector('[data-testid="stream-stale"]')
     expect(banner).not.toBeNull()
     // 明确说“已停滞”，而不是继续装活着。
@@ -159,14 +162,14 @@ describe('ChatPage 停滞看门狗呈现', () => {
   })
 
   it('Retry re-dispatches the last unanswered prompt through the runtime', async () => {
-    const host = await renderChatPage()
+    const { host } = await renderChatPage()
     const retry = clickButton(host, 'wake-stuck-turn')
     await act(async () => { retry.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(runtimeStub.wakeStuckTurn).toHaveBeenCalledWith('stalled-conversation')
   })
 
   it('Stop hard-stops the stalled conversation', async () => {
-    const host = await renderChatPage()
+    const { host } = await renderChatPage()
     const stop = clickButton(host, 'cancel-stuck-turn')
     await act(async () => { stop.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(runtimeStub.forceStopConversation).toHaveBeenCalledWith('stalled-conversation')
@@ -175,7 +178,7 @@ describe('ChatPage 停滞看门狗呈现', () => {
   it('a long-running tool keeps the neutral “tool running” wording instead of stalling', async () => {
     runtimeStub.activeStallKind = ''
     runtimeStub.activeToolRunning = true
-    const host = await renderChatPage()
+    const { host } = await renderChatPage()
     const banner = host.querySelector('[data-testid="stream-stale"]')
     expect(banner).not.toBeNull()
     expect(banner?.textContent).toContain('工具执行中')
@@ -184,10 +187,32 @@ describe('ChatPage 停滞看门狗呈现', () => {
 
   it('detects the dead process too: engine-gone wording without pretending progress', async () => {
     runtimeStub.activeStallKind = 'engine-gone'
-    const host = await renderChatPage()
+    const { host } = await renderChatPage()
     const banner = host.querySelector('[data-testid="stream-stale"]')
     expect(banner?.textContent).toContain('已停滞')
     expect(banner?.textContent).toContain('心跳已停')
     expect(host.querySelector('[data-testid="wake-stuck-turn"]')).not.toBeNull()
+  })
+
+  it('进入停滞的边沿只发一次系统通知，持续停滞不重复发', async () => {
+    const { root, element } = await renderChatPage()
+    expect(runtimeStub.notifyTurnStall).toHaveBeenCalledTimes(1)
+    expect(runtimeStub.notifyTurnStall).toHaveBeenCalledWith({
+      conversationId: 'stalled-conversation',
+      stallKind: 'model-stalled',
+      quietMs: 130_000,
+    })
+    // 持续停滞：时长继续涨（每秒重渲染），但 stalled 没翻转 ⇒ 不再发。
+    runtimeStub.streamStaleSeconds = 260
+    await act(async () => { root.render(element) })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
+    expect(runtimeStub.notifyTurnStall).toHaveBeenCalledTimes(1)
+  })
+
+  it('没有停滞（工具在跑/排队）就不发通知', async () => {
+    runtimeStub.activeStallKind = ''
+    runtimeStub.activeToolRunning = true
+    await renderChatPage()
+    expect(runtimeStub.notifyTurnStall).not.toHaveBeenCalled()
   })
 })

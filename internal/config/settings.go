@@ -169,7 +169,9 @@ type AppSettings struct {
 	CompanionFloatEnabled    *bool                `json:"companion_float_enabled,omitempty"`
 	CompanionSkinID          string               `json:"companion_skin_id,omitempty"`
 	CompanionProactivity     CompanionProactivity `json:"companion_proactivity,omitempty"`
-	CompanionTeaching        string               `json:"companion_teaching,omitempty"`
+	// TaskNotify 是任务通知（外壳 NotifyTask）的开关；缺字段按默认处理（见 TaskNotifyPreferences）。
+	TaskNotify        TaskNotifyPreferences `json:"task_notify,omitempty"`
+	CompanionTeaching string                `json:"companion_teaching,omitempty"`
 	// CompanionReplyStyle is markdown (full-width assistant text) or chat (bubbles).
 	CompanionReplyStyle string `json:"companion_reply_style,omitempty"`
 	// ImageGenProvider / ImageGenModel / ImageGenSource select the paid image
@@ -1415,6 +1417,7 @@ func normalizeCompanionSettings(value AppSettings) AppSettings {
 	}
 	value.CompanionSkinID = NormalizeCompanionSkinID(value.CompanionSkinID)
 	value.CompanionProactivity = normalizeCompanionProactivity(value.CompanionProactivity)
+	value.TaskNotify = normalizeTaskNotifyPreferences(value.TaskNotify)
 	value.CompanionTeaching = NormalizeCompanionTeaching(value.CompanionTeaching)
 	value.CompanionReplyStyle = NormalizeCompanionReplyStyle(value.CompanionReplyStyle)
 	value.CompanionMemoryExtract = NormalizeCompanionMemoryExtract(value.CompanionMemoryExtract)
@@ -1600,6 +1603,7 @@ func clone(value AppSettings) AppSettings {
 		copy.CompanionFloatEnabled = &enabled
 	}
 	copy.CompanionProactivity = cloneCompanionProactivity(value.CompanionProactivity)
+	copy.TaskNotify = cloneTaskNotifyPreferences(value.TaskNotify)
 	copy.ModelVerified = cloneModelVerification(value.ModelVerified)
 	return copy
 }

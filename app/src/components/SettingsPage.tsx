@@ -84,6 +84,7 @@ import {
 } from '@/lib/imageGenCatalog'
 import { GitHubIcon } from '@/components/GitHubIcon'
 import type { ThemeMode } from '@/lib/themeMode'
+import { taskNotifyAllOn as taskNotifyAllOnDraft, taskNotifyDraftFromSettings, taskNotifySettingsAll, taskNotifySettingsPatch } from '@/lib/taskNotifySettingsDraft'
 import SearchableModelPicker from '@/components/SearchableModelPicker'
 import { annotateModelFailures, type SearchableModelGroup } from '@/lib/modelPickerSearch'
 import VulnerabilityIntelSettingsPanel from '@/components/VulnerabilityIntelSettingsPanel'
@@ -118,7 +119,7 @@ import {
 import ExternalEditorIcon from '@/components/ExternalEditorIcon'
 import { explainModelVerificationFailure } from '@/lib/tokenFluxError'
 import { applyUiLocale, normalizeUiLocale, t } from '@/lib/uiLocale'
-import { toggleWindowMaximize } from '@/lib/hostPlatform'
+import { readHostPlatform, toggleWindowMaximize } from '@/lib/hostPlatform'
 import {
   CATALOG_MODEL_PROVIDERS,
   MODEL_PROVIDER_API_LABELS,
@@ -931,6 +932,52 @@ export default function SettingsPage({
                       </Button>
                     )}
                   />
+                </SettingsSection>
+
+                <SettingsSection title={t('任务通知', 'Task notifications')}>
+                  <SettingsRow
+                    label={t('任务状况通知', 'Task status notifications')}
+                    divider={false}
+                    trailing={(
+                      <Switch
+                        checked={store.taskNotifyAllOn()}
+                        aria-label={t('任务状况通知', 'Task status notifications')}
+                        onCheckedChange={value => store.setTaskNotifyAll(Boolean(value))}
+                      />
+                    )}
+                  />
+                  <SettingsRow
+                    label={t('模型疑似挂死', 'Model appears stalled')}
+                    trailing={(
+                      <Switch
+                        checked={store.taskNotifyDraft().stalled}
+                        // 上级「任务状况通知」关掉时这一类也不发 ⇒ 灰掉不可单独打开（与提示音一致）。
+                        disabled={!store.taskNotifyAllOn()}
+                        aria-label={t('模型疑似挂死', 'Model appears stalled')}
+                        onCheckedChange={value => store.setTaskNotifyStalled(Boolean(value))}
+                      />
+                    )}
+                  />
+                  <SettingsRow
+                    label={t('通知提示音（默认关）', 'Notification sound (off by default)')}
+                    trailing={(
+                      <Switch
+                        checked={store.taskNotifyDraft().sound}
+                        // 上级「任务状况通知」关掉时，提示音没有意义 ⇒ 灰掉不可选（保留用户已选的值）。
+                        disabled={!store.taskNotifyAllOn()}
+                        aria-label={t('通知提示音', 'Notification sound')}
+                        onCheckedChange={value => store.setTaskNotifySound(Boolean(value))}
+                      />
+                    )}
+                  />
+                  {readHostPlatform() === 'linux' ? (
+                    <p className="px-4 pb-3 text-caption text-muted-foreground">
+                      {t(
+                        'Linux 暂不支持桌面通知，以上开关只在 macOS / Windows 生效。',
+                        'Desktop notifications are not supported on Linux yet; these switches only take effect on macOS and Windows.',
+                      )}
+                    </p>
+                  ) : null}
                 </SettingsSection>
               </>
             ) : working && category === 'skills' ? (
@@ -3337,6 +3384,41 @@ function createSettingsStore(
     return lines.join('\n')
   }
 
+  // 任务通知开关（拍板/失败/跑完/停滞/提示音）：照 setSkillEnabled 的形状，只改被点的那一个，缺字段回默认。
+  function taskNotifyDraft() {
+    return taskNotifyDraftFromSettings(s.working)
+  }
+
+  function setTaskNotifyKey(key: 'needsInput' | 'failed' | 'completed' | 'stalled' | 'sound', value: boolean) {
+    patchWorking(working => {
+      working.task_notify = taskNotifySettingsPatch(taskNotifyDraftFromSettings(working), key, value)
+    })
+    void save()
+  }
+
+  /** 模型疑似挂死（停滞看门狗）：默认关；打开后进入停滞边沿才弹系统通知。 */
+  function setTaskNotifyStalled(value: boolean) {
+    setTaskNotifyKey('stalled', value)
+  }
+
+  /** 通知提示音：默认关（静默）。打开后外壳收到 silent=false，系统才会响。 */
+  function setTaskNotifySound(value: boolean) {
+    setTaskNotifyKey('sound', value)
+  }
+
+  /** 总开关「任务状况通知」的状态：任一子项开着就算开着（旧配置也不会误显示为关）。 */
+  function taskNotifyAllOn() {
+    return taskNotifyAllOnDraft(taskNotifyDraft())
+  }
+
+  /** 拨总开关：**四类子项**（待拍板/失败/跑完/停滞）一次性设成同一个值；提示音的值保持不动（它只是被灰掉，不改值）。 */
+  function setTaskNotifyAll(value: boolean) {
+    patchWorking(working => {
+      working.task_notify = taskNotifySettingsAll(taskNotifyDraftFromSettings(working), value)
+    })
+    void save()
+  }
+
   async function copyBuildTracking() {
     if (!s.buildTracking) return
     s.buildTrackingCopying = true
@@ -3839,6 +3921,11 @@ function createSettingsStore(
     databaseVersionText,
     formatBuildTrackingText,
     copyBuildTracking,
+    taskNotifyDraft,
+    taskNotifyAllOn,
+    setTaskNotifyAll,
+    setTaskNotifyStalled,
+    setTaskNotifySound,
     save,
     codingToolSkill,
     codingToolStatusLabel,

@@ -983,6 +983,22 @@ async function handleHostRequest(method, payload = {}) {
   }
 }
 
+// 跨调用累积（键 ⇒ 上次通知时间戳）：**同一事件**只通知一次；60 秒窗口是第二层防抖。
+// 键由 task-notify.cjs 的 taskNotifyKey 统一构造（会话 + 类型 + 可选 turnKey）。
+const taskNotifySeen = new Map()
+
+// 任务通知的 Dock 角标计数（0 = 不显示）。规则：真弹出一条 +1；App 回到前台（含点了通知）清零。
+let taskNotifyBadge = 0
+function applyTaskNotifyBadge(next) {
+  taskNotifyBadge = Number(next) > 0 ? Math.floor(Number(next)) : 0
+  try {
+    // macOS 走 dock 角标；Windows/Linux 由 Electron 自行映射；失败不影响通知本身。
+    if (typeof app.setBadgeCount === 'function') app.setBadgeCount(taskNotifyBadge)
+  } catch { /* 角标是锦上添花，绝不能因为它让通知失败 */ }
+}
+
+const { shouldNotify, buildPayload, show, taskNotifyKey, TASK_NOTIFY_WINDOW_MS, badgeAfterNotify, badgeAfterRead } = require('./task-notify.cjs')
+
 function emitRendererEvent(event, value) {
   if (!EVENT_PATTERN.test(String(event))) return
   if (companionShell) {
@@ -1168,6 +1184,50 @@ ipcMain.handle('milksu:invoke', async (event, request) => {
   }
   // Packaging provenance is owned by the desktop shell, not Go domain logic.
   if (method === 'GetBuildTracking') return loadBuildTracking()
+  // Task notifications are shell-owned too: the renderer only asks.
+  // Dependency injection mirrors desktop/task-notify.cjs so the decision stays pure/testable.
+  if (method === 'NotifyTask') {
+    const notifyInput = hostArgs ?? {}
+    // 一次调用只取一次时间 ⇒ 判断与写入用同一个 now（避免边界抖动）。
+    const notifyNow = Date.now()
+    const reason = shouldNotify(notifyInput, {
+      // 开关在渲染层已查过（没开根本不会调进来）；外壳这里恒开，只管前台压制与去重。
+      enabled: true,
+      // "聚焦"要的是"这个窗口是当前活跃窗口"，**不是**"窗口可见" ✗：
+      // 窗口在后台但仍可见（用户在看别的 App）时也要弹通知，否则等于永远收不到。
+      focused: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
+      platform: process.platform,
+      lastNotified: taskNotifySeen,
+      now: notifyNow,
+    })
+    if (reason !== 'notify') return { shown: false, reason }
+    // 写入前剪枝（超过窗口的项删掉，避免 Map 无限增长）：按时间清理是安全的，
+    // 因为"只发一次"由键保证，清理时机不参与正确性判断。
+    for (const [seenKey, seenAt] of taskNotifySeen) {
+      // 与 task-notify.cjs 的 seenAllowsAgain 保持同一口径（严格超过才放行）
+      if (notifyNow - Number(seenAt) > TASK_NOTIFY_WINDOW_MS) taskNotifySeen.delete(seenKey)
+    }
+    taskNotifySeen.set(taskNotifyKey(notifyInput), notifyNow)
+    const notifyResult = show(buildPayload(notifyInput), {
+      platform: process.platform,
+      Notification,
+      onClick: value => {
+        // 点了通知 = 已读 ⇒ 立刻清角标（窗口获得焦点时还会再清一次，幂等 ✓）。
+        applyTaskNotifyBadge(badgeAfterRead())
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.show()
+          mainWindow.focus()
+        }
+        emitRendererEvent('task.notify.clicked', { conversationId: value?.conversationId ?? '' })
+      },
+    })
+    if (notifyResult === 'shown') {
+      // 角标：真的弹出来才 +1；用户回前台（或点通知）时清零 ⇒ “看过就不再提醒”。
+      applyTaskNotifyBadge(badgeAfterNotify(taskNotifyBadge, notifyResult))
+      return { shown: true }
+    }
+    return { shown: false, reason: notifyResult }
+  }
   if (method === 'SetTitleBarOverlay') {
     const payload = Array.isArray(request?.args) ? request.args[0] : request?.args
     const theme = payload?.theme === 'dark' ? 'dark' : 'light'
@@ -1452,6 +1512,10 @@ app.whenReady().then(async () => {
   })
   mainWindow.on('restore', () => {
     companionShell.revealFromTaskbar()
+  })
+  // 回到前台 = 用户已经看到了 ⇒ 清角标（“已读即清”）。与点通知里的清零同一口径、幂等 ✓。
+  mainWindow.on('focus', () => {
+    applyTaskNotifyBadge(badgeAfterRead())
   })
   companionShell.refreshMenus()
   startupLog('createWindow')

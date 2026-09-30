@@ -72,7 +72,7 @@ tag 与分发 source `a654c4d5` 之间只差测试与文档提交，无未打进
 ## 未打进最近安装包
 
 工作树里已有、最近一次正式包装（版本见 README）没有的，以代码为准。tag `9e2825f3`
-之后只有 README 与本文档提交，没有未打进安装包的产品代码。发下一版前仍缺的验收：
+之后已合入 #190–#210 等一批修复与功能（详见 Git 历史），均未经真机验收。发下一版前仍缺的验收：
 
 - Windows Computer Use 整段崩溃尚未真机验收。Windows / Linux 窗口铬尚未真机验收。
 - 本机安全工具 capa 当前仅支持 macOS arm64/amd64（PR #193 在途）；Linux / Windows 上设置页
@@ -80,6 +80,8 @@ tag 与分发 source `a654c4d5` 之间只差测试与文档提交，无未打进
 - 新会话不再默认继承最近项目（#169 改向），这条新行为还没有真机验收。
 - 宽作业用 `recon-authorized-target` Skill，不造 typed sweep。Computer Use 选窗器仍是可选人工面。
 - DSH `bash` 没有 MilkSU 侧超时上界。
+- 任务状况桌面通知（#210）当前只在 macOS / Windows 弹；Linux 返回 `unsupported`，
+  设置页已注明「Linux 暂不支持桌面通知」。五类开关全默认关。
 - issue #117 的另外几问、#155、#156 还没接到决策这一层。
 
 ## 完成线

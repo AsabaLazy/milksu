@@ -393,6 +393,8 @@ export interface AppSettings {
   companion_float_enabled?: boolean
   companion_skin_id?: string
   companion_proactivity?: CompanionProactivity
+  /** 任务通知的开关（与 Go 侧 AppSettings.task_notify 的 JSON 名一致）。 */
+  task_notify?: { needs_input?: boolean; failed?: boolean; completed?: boolean; stalled?: boolean; sound?: boolean }
   companion_teaching?: CompanionTeaching
   companion_reply_style?: 'markdown' | 'chat'
   /** ImageGen route — independent of active_provider / active_model (chat). */
