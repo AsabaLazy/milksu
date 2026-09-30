@@ -566,13 +566,15 @@ export default function SettingsPage({
 
   return (
     <main className="settings-page flex min-w-0 flex-1 flex-col bg-background">
+      <div
+        className="settings-window-drag-region app-drag"
+        aria-hidden="true"
+        onDoubleClick={() => toggleWindowMaximize()}
+      />
       <div className="settings-layout flex min-h-0 flex-1">
         <div className="page-scroll min-w-0 flex-1">
           <div className="page-column page-stack" data-plugin-surface="workspace-list">
-            <div
-              className="app-drag settings-page-title shell-window-control-safe-x flex items-center gap-1 py-2 text-foreground"
-              onDoubleClick={() => toggleWindowMaximize()}
-            >
+            <div className="settings-page-title shell-window-control-safe-x flex items-center gap-1 py-2 text-foreground">
               {managementView ? (
                 <Button
                   type="button"
@@ -3942,6 +3944,16 @@ function createSettingsStore(
 }
 
 const settingsPageCss = `
+.settings-window-drag-region {
+  display: none;
+}
+
+:root[data-host-platform='linux'] .settings-window-drag-region {
+  display: block;
+  height: var(--shell-title-safe-top);
+  flex: none;
+}
+
 .settings-page-title {
   --shell-window-control-gutter: 1.25rem;
 }
