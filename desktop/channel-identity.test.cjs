@@ -115,6 +115,16 @@ test('applyChannelIsolation pins beta userData under appData by appId', () => {
     `${path.join(paths.appData, BETA_USER_DATA_DIR_NAME)}-qa-1`,
   )
   assert.equal(betaIsolated.isolatedInstance, true)
+
+  const betaOverridePath = path.join(process.cwd(), 'beta-isolated-user-data')
+  const betaOverride = applyChannelIsolation(channelIdentity('beta'), {
+    app: appLike,
+    instanceId: 'qa-2',
+    userDataPathOverride: betaOverridePath,
+  })
+  assert.equal(betaOverride.userData, path.resolve(betaOverridePath))
+  assert.equal(betaOverride.isolatedInstance, true)
+  assert.equal(paths.userData, betaOverride.userData)
 })
 
 test('applyChannelIsolation keeps stable natural userData unless instance isolated', () => {
@@ -154,6 +164,24 @@ test('applyChannelIsolation keeps stable natural userData unless instance isolat
   assert.equal(isolated.userData, `${natural}-fork-a`)
   assert.equal(isolated.isolatedInstance, true)
   assert.deepEqual(appLike.names, [STABLE_PRODUCT_NAME])
+
+  paths.userData = natural
+  appLike.names = []
+  const override = path.join(process.cwd(), 'isolated-user-data')
+  const overridden = applyChannelIsolation(channelIdentity('stable'), {
+    app: appLike,
+    instanceId: 'smoke-1',
+    userDataPathOverride: override,
+  })
+  assert.equal(overridden.userData, path.resolve(override))
+  assert.equal(paths.userData, overridden.userData)
+  assert.equal(overridden.isolatedInstance, true)
+
+  assert.throws(() => applyChannelIsolation(channelIdentity('stable'), {
+    app: appLike,
+    instanceId: 'smoke-1',
+    userDataPathOverride: 'relative-user-data',
+  }), /MILKSU_ELECTRON_USER_DATA_DIR must be an absolute path/u)
 })
 
 test('planChannelIsolation is pure and always plans productName for setName', () => {
@@ -196,7 +224,7 @@ test('browserProfileRoots does not expand Stable to natural userData', () => {
   })
   assert.deepEqual(stableWithOverride, [
     path.join(appData, STABLE_USER_DATA_DIR_NAME),
-    '/tmp/custom-appdata',
+    path.resolve('/tmp/custom-appdata'),
   ])
 
   const betaRoots = browserProfileRoots({
@@ -217,7 +245,7 @@ test('browserProfileRoots does not expand Stable to natural userData', () => {
   })
   assert.deepEqual(betaIsolatedRoots, [
     path.join(appData, BETA_USER_DATA_DIR_NAME),
-    path.join(appData, `${BETA_USER_DATA_DIR_NAME}-qa`),
+    path.resolve(path.join(appData, `${BETA_USER_DATA_DIR_NAME}-qa`)),
   ])
   assert.ok(!betaIsolatedRoots.includes(path.join(appData, STABLE_USER_DATA_DIR_NAME)))
 
@@ -229,7 +257,7 @@ test('browserProfileRoots does not expand Stable to natural userData', () => {
   })
   assert.deepEqual(isolatedStableRoots, [
     path.join(appData, STABLE_USER_DATA_DIR_NAME),
-    path.join(appData, 'MilkSU-natural-fork'),
+    path.resolve(path.join(appData, 'MilkSU-natural-fork')),
   ])
 })
 

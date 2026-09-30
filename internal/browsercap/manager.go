@@ -127,6 +127,10 @@ type CodingHost interface {
 	Close()
 }
 
+type researchCodingHost interface {
+	CreateResearchTab(string, string) (CodingHostTabList, error)
+}
+
 type Capture struct {
 	SessionID        string                    `json:"sessionId"`
 	PageID           string                    `json:"pageId"`
@@ -610,6 +614,16 @@ func (m *Manager) ReloadCoding(conversationID string) error {
 func (m *Manager) CreateCodingTab(conversationID, targetURL string) (CodingBrowserStatus, error) {
 	return m.mutateCodingTabs(conversationID, func(sessionID string) (CodingHostTabList, error) {
 		return m.codingHost.CreateTab(sessionID, strings.TrimSpace(targetURL))
+	})
+}
+
+func (m *Manager) CreateResearchCodingTab(conversationID, targetURL string) (CodingBrowserStatus, error) {
+	host, ok := m.codingHost.(researchCodingHost)
+	if !ok {
+		return CodingBrowserStatus{}, fmt.Errorf("Research Browser host is unavailable")
+	}
+	return m.mutateCodingTabs(conversationID, func(sessionID string) (CodingHostTabList, error) {
+		return host.CreateResearchTab(sessionID, strings.TrimSpace(targetURL))
 	})
 }
 

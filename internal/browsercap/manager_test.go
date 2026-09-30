@@ -22,7 +22,9 @@ import (
 )
 
 type codingHostFixture struct {
-	started CodingHostStartRequest
+	started            CodingHostStartRequest
+	tabs               CodingHostTabList
+	researchTabCreated bool
 }
 
 func (host *codingHostFixture) Start(
@@ -41,11 +43,19 @@ func (*codingHostFixture) Navigate(string, string) error            { return nil
 func (*codingHostFixture) Back(string) error                        { return nil }
 func (*codingHostFixture) Forward(string) error                     { return nil }
 func (*codingHostFixture) Reload(string) error                      { return nil }
-func (*codingHostFixture) ListTabs(string) (CodingHostTabList, error) {
-	return CodingHostTabList{}, nil
+func (host *codingHostFixture) ListTabs(string) (CodingHostTabList, error) {
+	return host.tabs, nil
 }
 func (*codingHostFixture) CreateTab(string, string) (CodingHostTabList, error) {
 	return CodingHostTabList{}, nil
+}
+func (host *codingHostFixture) CreateResearchTab(sessionID, targetURL string) (CodingHostTabList, error) {
+	host.researchTabCreated = true
+	host.tabs = CodingHostTabList{
+		ActiveTabID: "tab_research",
+		Tabs:        []CodingBrowserTab{{ID: "tab_research", URL: targetURL, Active: true}},
+	}
+	return host.tabs, nil
 }
 func (*codingHostFixture) ActivateTab(string, string) (CodingHostTabList, error) {
 	return CodingHostTabList{}, nil
@@ -110,6 +120,29 @@ func TestEnsureCodingStartsBlankOnce(t *testing.T) {
 	}
 	if second.SessionID != first.SessionID {
 		t.Fatalf("ensure replaced the live session: %s -> %s", first.SessionID, second.SessionID)
+	}
+}
+
+func TestCreateResearchCodingTabUsesFreshResearchHostView(t *testing.T) {
+	host := &codingHostFixture{}
+	manager, err := NewWithCodingHost(t.TempDir(), host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	if _, err := manager.EnsureCoding(context.Background(), "research-conversation"); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := manager.CreateResearchCodingTab("research-conversation", "https://example.test/paper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !host.researchTabCreated {
+		t.Fatal("Research tab used the ordinary browser creation path")
+	}
+	if status.ActiveTabID != "tab_research" || len(status.Tabs) != 1 || status.Tabs[0].URL != "https://example.test/paper" {
+		t.Fatalf("unexpected Research tab status: %#v", status)
 	}
 }
 

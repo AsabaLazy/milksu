@@ -26,6 +26,15 @@ func (a *App) StartCodingBrowser(
 	if a.browserBridge == nil {
 		return browsercap.CodingBrowserStatus{}, fmt.Errorf("浏览器服务不可用")
 	}
+	if a.research != nil {
+		researchActive, err := a.researchRunActiveForConversation(conversationID)
+		if err != nil {
+			return browsercap.CodingBrowserStatus{}, err
+		}
+		if researchActive {
+			return browsercap.CodingBrowserStatus{}, fmt.Errorf("Deep Research 运行期间不能替换浏览器")
+		}
+	}
 	initialURL = strings.TrimSpace(initialURL)
 	startContext, cancel := context.WithTimeout(
 		a.commandContext(),
@@ -59,6 +68,17 @@ func (a *App) lookupCodingBrowserDescriptor(
 		SessionID:   descriptor.SessionID,
 		CDPEndpoint: descriptor.CDPEndpoint,
 	}, true
+}
+
+func (a *App) ensureResearchBrowserMode(conversationID string) error {
+	if a.research == nil {
+		return nil
+	}
+	researchActive, err := a.researchRunActiveForConversation(conversationID)
+	if err != nil || !researchActive {
+		return err
+	}
+	return a.setResearchBrowserMode(conversationID, true)
 }
 
 // resolveInteractiveCodingBrowser decides whether this send may attach the
@@ -102,7 +122,14 @@ func (a *App) EnsureCodingBrowser(
 			codingBrowserStatusTimeout,
 		)
 		defer cancel()
-		return a.browserBridge.CodingStatus(statusContext, conversationID)
+		status, err := a.browserBridge.CodingStatus(statusContext, conversationID)
+		if err != nil {
+			return browsercap.CodingBrowserStatus{}, err
+		}
+		if err := a.ensureResearchBrowserMode(conversationID); err != nil {
+			return browsercap.CodingBrowserStatus{}, err
+		}
+		return status, nil
 	}
 	startContext, cancel := context.WithTimeout(
 		a.commandContext(),
@@ -111,6 +138,9 @@ func (a *App) EnsureCodingBrowser(
 	defer cancel()
 	status, err := a.browserBridge.EnsureCoding(startContext, conversationID)
 	if err != nil {
+		return browsercap.CodingBrowserStatus{}, err
+	}
+	if err := a.ensureResearchBrowserMode(conversationID); err != nil {
 		return browsercap.CodingBrowserStatus{}, err
 	}
 	a.diagnostics.Record("coding-browser", "info", "isolated Coding browser ready")
@@ -145,6 +175,20 @@ func (a *App) NavigateCodingBrowser(conversationID, targetURL string) error {
 	if targetURL == "" {
 		return fmt.Errorf("请输入要打开的 http 或 https 地址")
 	}
+	if a.research != nil {
+		researchActive, err := a.researchRunActiveForConversation(conversationID)
+		if err != nil {
+			return err
+		}
+		if researchActive {
+			targetURL, err = validateResearchBrowserURL(targetURL)
+			if err != nil {
+				return err
+			}
+			_, err = a.browserBridge.CreateResearchCodingTab(conversationID, targetURL)
+			return err
+		}
+	}
 	return a.browserBridge.NavigateCoding(conversationID, targetURL)
 }
 
@@ -177,6 +221,20 @@ func (a *App) CreateCodingBrowserTab(
 		return browsercap.CodingBrowserStatus{}, fmt.Errorf("浏览器服务不可用")
 	}
 	return a.browserBridge.CreateCodingTab(conversationID, targetURL)
+}
+
+func (a *App) createResearchCodingBrowserTab(
+	conversationID,
+	targetURL string,
+) (browsercap.CodingBrowserStatus, error) {
+	if a.browserBridge == nil {
+		return browsercap.CodingBrowserStatus{}, fmt.Errorf("浏览器服务不可用")
+	}
+	validatedURL, err := validateResearchBrowserURL(targetURL)
+	if err != nil {
+		return browsercap.CodingBrowserStatus{}, err
+	}
+	return a.browserBridge.CreateResearchCodingTab(conversationID, validatedURL)
 }
 
 func (a *App) ActivateCodingBrowserTab(
@@ -218,6 +276,15 @@ func (a *App) StopCodingBrowser(
 ) (browsercap.CodingBrowserStatus, error) {
 	if a.browserBridge == nil {
 		return browsercap.CodingBrowserStatus{}, fmt.Errorf("浏览器服务不可用")
+	}
+	if a.research != nil {
+		researchActive, err := a.researchRunActiveForConversation(conversationID)
+		if err != nil {
+			return browsercap.CodingBrowserStatus{}, err
+		}
+		if researchActive {
+			return browsercap.CodingBrowserStatus{}, fmt.Errorf("cancel or finish Deep Research before stopping the Browser")
+		}
 	}
 	// Dispose the MCP client before stopping Chromium, while retaining the
 	// persisted Pi conversation for the next turn.

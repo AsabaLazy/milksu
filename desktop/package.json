@@ -10,6 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@milksu/milksu": "file:..",
     "electron-updater": "6.8.9",
     "ws": "8.21.1"
   },
@@ -35,6 +36,8 @@
       "channel-identity.cjs",
       "build-tracking-view.cjs",
       "browser-view-attachment.cjs",
+      "research-browser-network-policy.cjs",
+      "research-browser-lifecycle.cjs",
       "update-manager.cjs",
       "update-artifacts.cjs",
       "linux-update-apply.cjs",

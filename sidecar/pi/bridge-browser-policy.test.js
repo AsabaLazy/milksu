@@ -9,6 +9,7 @@ import {
   codingBrowserMcpServerName,
   codingBrowserToolBlockReason,
   formatCodingBrowserApprovalInput,
+  researchBrowserToolBlockReason,
 } from "./bridge-browser-policy.js";
 
 test("tells the model to use the built-in browser without asking the user to enable it", () => {
@@ -47,6 +48,28 @@ test("blocks the unsafe Playwright code tool only on the built-in browser server
     ),
     "",
   );
+});
+
+test("research Browser fallback allows only read-only tools for a typed focused tab", () => {
+  assert.equal(researchBrowserToolBlockReason({ tool: "browser_snapshot" }, codingBrowserMcpServerName, true, "tab-1"), "");
+  assert.equal(researchBrowserToolBlockReason({ tool: "browser_wait_for" }, codingBrowserMcpServerName, true, "tab-1"), "");
+  assert.match(
+    researchBrowserToolBlockReason({ tool: "browser_snapshot" }, codingBrowserMcpServerName, true),
+    /typed research Browser action/,
+  );
+  assert.match(
+    researchBrowserToolBlockReason({ tool: "browser_navigate" }, codingBrowserMcpServerName, true),
+    /typed research Browser action/,
+  );
+  assert.match(
+    researchBrowserToolBlockReason({ tool: "browser_click" }, codingBrowserMcpServerName, true),
+    /read-only/,
+  );
+  assert.match(
+    researchBrowserToolBlockReason({ tool: "browser_snapshot" }, browserUseMcpServerName, true),
+    /managed Browser/,
+  );
+  assert.equal(researchBrowserToolBlockReason({ tool: "browser_navigate" }, codingBrowserMcpServerName, false), "");
 });
 
 test("labels user-browser approvals separately from the isolated browser", () => {

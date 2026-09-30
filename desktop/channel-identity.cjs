@@ -148,15 +148,30 @@ function applyChannelIsolationPlan(appLike, plan) {
  *     getPath: (name: string) => string,
  *   },
  *   instanceId?: string,
+ *   userDataPathOverride?: string,
  * }} options
  */
 function applyChannelIsolation(identity, options) {
   const appLike = options.app
-  const plan = planChannelIsolation(identity, {
+  const userDataPathOverride = String(options.userDataPathOverride ?? '').trim()
+  if (userDataPathOverride) {
+    if (!path.isAbsolute(userDataPathOverride)) {
+      throw new Error('MILKSU_ELECTRON_USER_DATA_DIR must be an absolute path')
+    }
+  }
+  let plan = planChannelIsolation(identity, {
     appDataPath: appLike.getPath('appData'),
     naturalUserDataPath: appLike.getPath('userData'),
     instanceId: options.instanceId,
   })
+  if (userDataPathOverride) {
+    plan = {
+      ...plan,
+      userData: path.resolve(userDataPathOverride),
+      isolatedInstance: true,
+      pinUserData: true,
+    }
+  }
   return applyChannelIsolationPlan(appLike, plan)
 }
 
