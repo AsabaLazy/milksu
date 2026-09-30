@@ -221,6 +221,8 @@ export interface Conversation {
   modelSource?: ModelSource
   executionMode?: CodingExecutionMode
   approvalPolicy?: CodingApprovalPolicy
+  /** 上一轮出过事的记录（落盘）。横幅与侧栏红叉据此在重启后仍然显示。 */
+  agentProblem?: { notice?: string; noticeEnglish?: string; at?: number }
   mcpServers?: string[]
   mcpConfigDigest?: string
   agentTools?: string[]

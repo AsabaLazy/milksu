@@ -236,6 +236,7 @@ func desktopAppMethods(app *App) map[string]desktopAppMethod {
 		"RevealUserArtifactDirectory":          rendererDesktopMethod(app.RevealUserArtifactDirectory),
 		"GetStartupRecoveryStatus":             rendererDesktopMethod(app.GetStartupRecoveryStatus),
 		"ListConversations":                    rendererDesktopMethod(app.ListConversations),
+		"ClearConversationProblem":             rendererDesktopMethod(app.ClearConversationProblem),
 		"ListArchivedConversations":            rendererDesktopMethod(app.ListArchivedConversations),
 		"SaveConversation":                     rendererDesktopMethod(app.SaveConversation),
 		"EnsureCodingArtifactWorkspace":        rendererDesktopMethod(app.EnsureCodingArtifactWorkspace),

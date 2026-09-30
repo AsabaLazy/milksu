@@ -71,7 +71,8 @@ import {
   TRANSCRIPT_WINDOW_CAP,
 } from '@/lib/transcriptWindow'
 import { isGeneratedScratchWorkspace } from '@/lib/codingConversationGroups'
-import AgentLiveStatus from '@/components/AgentLiveStatus'
+import AgentPixelLoader from '@/components/AgentPixelLoader'
+import { BackgroundTaskStrip } from '@/components/BackgroundTaskStrip'
 import AkLoadingMark from '@/components/AkLoadingMark'
 import ChatActivityGroup from '@/components/ChatActivityGroup'
 import ChatProcessFold from '@/components/ChatProcessFold'
@@ -331,6 +332,10 @@ export type ChatPageProps = {
   onConsumePendingDraft?: () => void
   onExpand?: () => void
   onRestore?: () => void
+  /** 后台任务（事实层）：窄带要显示「有没有在跑」。 */
+  backgroundTasks?: Array<{ id?: unknown; name?: unknown; status?: unknown }>
+  /** 后台任务终态摘要：窄带跑完显示终态。 */
+  backgroundTaskOutcome?: { kind: 'failed' | 'cancelled' | 'completed'; count: number; firstName: string; at: number } | null
 }
 
 export type ChatPageHandle = {
@@ -419,6 +424,8 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   onConsumePendingDraft,
   onExpand,
   onRestore,
+  backgroundTasks,
+  backgroundTaskOutcome,
 }: ChatPageProps, ref) {
   const t = useT()
   const conversations = useConversations()
@@ -3115,6 +3122,34 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                 ) : null}
               </div>
             ) : null}
+            {/* 「这个对话遇到了问题」（上一轮运行失败 / 守卫示警）：**常驻在顶部**（就是「批准」
+                那个槽位）。不自动消失；读者可以点「知道了」立刻消除，或者发下一条消息
+                （开新一回合）自动消除。侧栏同时亮红叉（ContextSidebar）。
+                底色必须**不透明**：半透明底在深色／花哨背景上基本读不清（真机反馈）。 */}
+            {conversations.activeProblemTurn ? (
+              <div
+                className="sticky z-30 mx-auto mb-2 flex w-[72%] items-start gap-2 rounded-xl border border-red-500 bg-red-50 px-3 py-2 text-caption text-red-900 shadow-sm dark:bg-red-950 dark:text-red-100"
+                style={{ top: 'var(--chat-edge-top)' }}
+                data-testid="problem-bar"
+                role="status"
+              >
+                <span className="min-w-0 flex-1">
+                  {t(
+                    conversations.activeProblemTurn.notice || conversations.activeProblemTurn.noticeEnglish,
+                    conversations.activeProblemTurn.noticeEnglish || conversations.activeProblemTurn.notice,
+                  )}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  data-testid="dismiss-problem-bar"
+                  onClick={() => conversations.dismissProblemTurn()}
+                >
+                  {t('知道了', 'Dismiss')}
+                </Button>
+              </div>
+            ) : null}
             {pendingApprovalMessage ? (
               <div
                 className="sticky z-30 mx-auto mb-2 flex w-[72%] items-center gap-2 rounded-xl border border-primary/40 bg-background/95 px-3 py-2 shadow-sm"
@@ -3246,9 +3281,10 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                 ) : null}
                 {waitingForModel && !compacting ? (
                   <p className="chat-model-loading">
-                    <AgentLiveStatus
+                    <AgentPixelLoader
                       label={waitingLabel}
                       elapsed={waitingElapsed}
+                      running
                     />
                   </p>
                 ) : null}
@@ -3300,8 +3336,9 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
               data-testid="context-compaction-status"
               role="status"
             >
-              <AgentLiveStatus
+              <AgentPixelLoader
                 label={t('正在整理上下文', 'Compacting context')}
+                running
               />
             </p>
           ) : compactionError ? (
@@ -3369,6 +3406,35 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
           >
             <span className="hidden" aria-hidden="true" />
           </WindowFileDrop>
+
+          {/* 后台任务窄带：在跑时显示件数/名字并带「停止全部」，跑完显示终态 15 秒。
+              口径在 lib/backgroundStripDigest（纯函数、有测试）。 */}
+          <BackgroundTaskStrip
+            running={backgroundTasks}
+            outcome={backgroundTaskOutcome}
+            conversationId={conversation?.id}
+            onStopped={(taskIds) => {
+              // 乐观更新：立刻把这几件从「在跑」里移除；再触发一次 refresh 让引擎侧确认。
+              const active = conversation?.id ?? ''
+              if (!active) return
+              const remaining = (backgroundTasks ?? [])
+                .filter(task => !taskIds.includes(String(task?.id ?? '')))
+                .map(task => ({
+                  id: String(task?.id ?? ''),
+                  name: String(task?.name ?? ''),
+                  status: String(task?.status ?? ''),
+                }))
+              // 公开运行时对象上 backgroundTasks 是只读（只有 getter）⇒ 走 store 写入。
+              conversations.store.setState(state => ({
+                ...state,
+                backgroundTasks: { ...state.backgroundTasks, [active]: remaining },
+              }))
+              void invokeCommand('refresh_coding_background_tasks', {
+                conversationId: active,
+                workspacePath: conversation?.workspacePath ?? '',
+              }).catch(() => undefined)
+            }}
+          />
 
           <ChatComposer
             // 按会话重挂载：输入框内部有多处"上一个会话"的 ref，若不重挂载，切换时

@@ -15,7 +15,7 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
-import AgentLiveStatus from '@/components/AgentLiveStatus'
+import AgentPixelLoader from '@/components/AgentPixelLoader'
 import ChatSubagentRoster from '@/components/ChatSubagentRoster'
 import ChatWorkFold from '@/components/ChatWorkFold'
 import {
@@ -149,8 +149,9 @@ function ChatActivityGroup({
                   <span className="agent-chip__meta shrink-0 text-caption tabular-nums text-muted-foreground">
                     {entry.durationMs !== undefined ? <span>{durationLabel(entry.durationMs)}</span> : null}
                     {entry.running ? (
-                      <AgentLiveStatus
+                      <AgentPixelLoader
                         label={t('工具进行中', 'Tool running')}
+                        running
                       />
                     ) : null}
                   </span>

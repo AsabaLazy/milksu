@@ -12,6 +12,8 @@ export default function AppSidebar({
   activeConversationId,
   conversations,
   runningConversationIds,
+  problemConversationIds,
+  backgroundTasks,
   conversationActionError,
   ctfSection,
   codingContextOpen,
@@ -50,6 +52,9 @@ export default function AppSidebar({
   activeConversationId: string | null
   conversations: Conversation[]
   runningConversationIds?: string[]
+  /** 「上一轮出过事」的对话（侧栏红叉）。 */
+  problemConversationIds?: string[]
+  backgroundTasks?: Record<string, { id?: string; name?: string; status?: string }[]>
   conversationActionError?: string
   ctfSection: CTFWorkspaceSection
   codingContextOpen?: boolean
@@ -96,6 +101,8 @@ export default function AppSidebar({
         activeConversationId={activeConversationId}
         conversations={conversations}
         runningConversationIds={runningConversationIds}
+        problemConversationIds={problemConversationIds}
+        backgroundTasks={backgroundTasks}
         actionError={conversationActionError}
         ctfSection={ctfSection}
         accountStatus={accountStatus}

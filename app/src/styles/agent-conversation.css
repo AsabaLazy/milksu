@@ -520,6 +520,16 @@
   }
 }
 
+.agent-pixel-loader {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.agent-pixel-loader--compact {
+  gap: 0;
+}
+
 .agent-pixel {
   display: grid;
   flex-shrink: 0;
@@ -535,14 +545,96 @@
   opacity: 0.15;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .agent-pixel__cell {
+    animation: agent-pixel-on 650ms ease-in-out infinite;
+  }
+
+  .agent-pixel--bg-task {
+    animation: agent-bg-task-breathe 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes agent-pixel-on {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  18%,
+  42% {
+    opacity: 1;
+  }
+  62% {
+    opacity: 0.15;
+  }
+}
+
+@keyframes agent-bg-task-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 .agent-pixel--decision .agent-pixel__cell {
+  /* 关掉运行中的 650ms 快跳：待决策要「停下来等你」，不是「还在忙」。 */
+  animation: none;
   background: var(--warning);
   opacity: 1;
+}
+
+/* 「这个对话遇到了问题」：同一套 3×3 网格，画成红色的叉
+   （左上/右上/中心/左下/右下 = 0/2/4/6/8 五格，其余留空）。 */
+.agent-pixel--problem {
+  /* 静态警示，不呼吸：这不是「在忙」，是「出事了」。 */
+  animation: none;
+}
+
+.agent-pixel--problem .agent-pixel__cell {
+  animation: none;
+  opacity: 1;
+  background: var(--color-red-500);
+}
+
+/* 「有新消息」（未读）：一个方形点 —— 单个方块，不是 3×3 网格。
+   尺寸/圆角复用九格单格（4×4 + radius 1px），颜色沿用 primary 变量
+   （与主题 foreground 同值：深色主题下即白色，浅色主题下同样可读）。 */
+.agent-pixel__cell--unread {
+  /* 静态标记：不呼吸、不跳动。 */
+  animation: none;
+  opacity: 1;
+  background: var(--primary);
+}
+
+/* 「后台任务在跑」：同一套九格网格，只把一条 Z 形路径点亮成蓝色：
+   上行 0,1,2 → 中 4 → 下行 6,7,8（行优先索引）；其余两格留空。 */
+.agent-pixel--bg-task .agent-pixel__cell {
+  /* 关掉运行中的 650ms 快跳：这是「有东西在后台跑」，不是「这一步正在生成」。 */
+  animation: none;
+  opacity: 1;
+  background: var(--color-blue-400);
 }
 
 .agent-pixel__cell--hole {
   width: 4px;
   height: 4px;
+  /* 留空必须真的是「空」：不带 .agent-pixel__cell 类，也不会被上面的背景规则命中。 */
+  background: transparent;
+}
+
+[data-agent-conversation] .agent-pixel-loader__label {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+[data-agent-conversation] .agent-pixel-loader__elapsed {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 [data-agent-conversation] .agent-stream-caret {

@@ -76,32 +76,44 @@ type StoredConversation struct {
 	CreatedAt     uint64 `json:"createdAt"`
 	WorkspacePath string `json:"workspacePath,omitempty"`
 	// WorkspaceHome is the sidebar the conversation belongs to. Empty is Coding.
-	WorkspaceHome        string              `json:"workspaceHome,omitempty"`
-	Kernel               string              `json:"kernel,omitempty"`
-	ParentConversationID string              `json:"parentConversationId,omitempty"`
-	Multitask            bool                `json:"multitask,omitempty"`
-	ModelMode            string              `json:"modelMode,omitempty"`
-	ModelProvider        string              `json:"modelProvider,omitempty"`
-	ModelID              string              `json:"modelId,omitempty"`
-	ThinkingLevel        string              `json:"thinkingLevel,omitempty"`
-	ExecutionMode        string              `json:"executionMode,omitempty"`
-	ApprovalPolicy       string              `json:"approvalPolicy,omitempty"`
-	MCPServers           []string            `json:"mcpServers,omitempty"`
-	MCPConfigDigest      string              `json:"mcpConfigDigest,omitempty"`
-	AgentTools           []string            `json:"agentTools,omitempty"`
-	AgentExtensions      []string            `json:"agentExtensions,omitempty"`
-	AgentSkills          []string            `json:"agentSkills,omitempty"`
-	AgentCapabilities    []StoredCapability  `json:"agentCapabilities,omitempty"`
-	AgentGoal            *StoredGoal         `json:"agentGoal,omitempty"`
-	CTFJobID             string              `json:"ctfJobId,omitempty"`
-	CTFMode              string              `json:"ctfMode,omitempty"`
-	CTFRole              string              `json:"ctfRole,omitempty"`
-	DomainTaskContext    map[string]any      `json:"domainTaskContext,omitempty"`
-	LastContextUsage     *StoredContextUsage `json:"lastContextUsage,omitempty"`
-	ArchivedAt           uint64              `json:"archivedAt,omitempty"`
-	Pinned               bool                `json:"pinned,omitempty"`
-	PinnedOrder          *int64              `json:"pinnedOrder,omitempty"`
-	Messages             []StoredMessage     `json:"messages"`
+	WorkspaceHome        string             `json:"workspaceHome,omitempty"`
+	Kernel               string             `json:"kernel,omitempty"`
+	ParentConversationID string             `json:"parentConversationId,omitempty"`
+	Multitask            bool               `json:"multitask,omitempty"`
+	ModelMode            string             `json:"modelMode,omitempty"`
+	ModelProvider        string             `json:"modelProvider,omitempty"`
+	ModelID              string             `json:"modelId,omitempty"`
+	ThinkingLevel        string             `json:"thinkingLevel,omitempty"`
+	ExecutionMode        string             `json:"executionMode,omitempty"`
+	ApprovalPolicy       string             `json:"approvalPolicy,omitempty"`
+	MCPServers           []string           `json:"mcpServers,omitempty"`
+	MCPConfigDigest      string             `json:"mcpConfigDigest,omitempty"`
+	AgentTools           []string           `json:"agentTools,omitempty"`
+	AgentExtensions      []string           `json:"agentExtensions,omitempty"`
+	AgentSkills          []string           `json:"agentSkills,omitempty"`
+	AgentCapabilities    []StoredCapability `json:"agentCapabilities,omitempty"`
+	AgentGoal            *StoredGoal        `json:"agentGoal,omitempty"`
+	// 上一轮出过事的记录（落盘）：顶部横幅与侧栏红叉据此在重启后仍然显示，
+	// 直到读者点「知道了」或该对话开新一回合。
+	AgentProblem      *StoredAgentProblem `json:"agentProblem,omitempty"`
+	CTFJobID          string              `json:"ctfJobId,omitempty"`
+	CTFMode           string              `json:"ctfMode,omitempty"`
+	CTFRole           string              `json:"ctfRole,omitempty"`
+	DomainTaskContext map[string]any      `json:"domainTaskContext,omitempty"`
+	LastContextUsage  *StoredContextUsage `json:"lastContextUsage,omitempty"`
+	ArchivedAt        uint64              `json:"archivedAt,omitempty"`
+	Pinned            bool                `json:"pinned,omitempty"`
+	PinnedOrder       *int64              `json:"pinnedOrder,omitempty"`
+	Messages          []StoredMessage     `json:"messages"`
+}
+
+// StoredAgentProblem remembers that this conversation's last turn hit a problem (a guard
+// alarm or a run failure). Without persistence, reopening the app showed neither the banner
+// nor the sidebar cross for a conversation that had been blocked.
+type StoredAgentProblem struct {
+	Notice        string `json:"notice,omitempty"`
+	NoticeEnglish string `json:"noticeEnglish,omitempty"`
+	At            uint64 `json:"at,omitempty"`
 }
 
 // StoredContextUsage is the usage snapshot kept with a conversation. MaxOutput and

@@ -300,6 +300,7 @@ export default function App() {
     compactionError: conversations.activeCompactionError,
     turnStatus: conversations.activeTurnStatus,
     runningIds: conversations.runningConversationIds,
+    problemIds: conversations.problemConversationIds,
     actionError: conversations.conversationActionError,
     kernel: conversations.selectedKernel,
     modelMode: conversations.selectedModelMode,
@@ -1746,6 +1747,8 @@ export default function App() {
           activeConversationId={conv.activeId}
           conversations={conv.rows}
           runningConversationIds={conv.runningIds}
+          problemConversationIds={conv.problemIds}
+          backgroundTasks={conversations.backgroundTasks}
           conversationActionError={conv.actionError}
           accountStatus={accountStatus}
           ctfSection={ctfSection}
@@ -1919,6 +1922,8 @@ export default function App() {
                 messageQueue={conv.messageQueue}
                 sessionReady={conv.sessionReady}
                 resumed={conv.resumed}
+                backgroundTasks={conversations.backgroundTasks?.[conv.active?.id ?? ''] ?? []}
+                backgroundTaskOutcome={conversations.backgroundTaskOutcome?.[conv.active?.id ?? ''] ?? null}
                 compacting={conv.compacting}
                 compactedAt={conv.compactedAt}
                 compactionError={conv.compactionError}

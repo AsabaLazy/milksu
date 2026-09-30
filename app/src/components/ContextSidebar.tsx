@@ -2,8 +2,16 @@ import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type M
 import { createPortal } from 'react-dom'
 import { isComposingKey } from '@/lib/imeComposition'
 import AgentDecisionMark from '@/components/AgentDecisionMark'
+import AgentBackgroundTaskMark from '@/components/AgentBackgroundTaskMark'
+/** 后台任务（事实层）里一个任务的最小形状 —— 侧栏只需要知道「有没有」，不读名字与状态。 */
+export interface BackgroundTaskLineTask {
+  id?: string
+  name?: string
+  status?: string
+}
 import { needsDecisionConversationIds as needsDecisionConversationIdsFrom } from '@/lib/needsDecision'
-import AgentLiveStatus from '@/components/AgentLiveStatus'
+import AgentPixelLoader from '@/components/AgentPixelLoader'
+import { resolveSessionStatusMark } from '@/lib/sessionStatusMark'
 import profileAvatar from '@/assets/ctf-learner-avatar.png'
 import { invokeCommand } from '@/desktop'
 import {
@@ -213,6 +221,8 @@ export default function ContextSidebar({
   activeConversationId,
   conversations,
   runningConversationIds: runningIdsProp,
+  problemConversationIds: problemIdsProp,
+  backgroundTasks,
   actionError,
   ctfSection: _ctfSection,
   accountStatus,
@@ -250,6 +260,11 @@ export default function ContextSidebar({
   activeConversationId: string | null
   conversations: Conversation[]
   runningConversationIds?: string[]
+  /** 「上一轮出过事」的对话（侧栏红叉）；由持有 runtime 的那一层传进来。 */
+  problemConversationIds?: string[]
+  /** 后台任务（**事实层**，由持有 runtime 的那一层传进来 —— 与 runningConversationIds 同一条 props 路线）。
+      不要在这里调 useConversations() 工厂：那会拿到**另一份新 store**，事实永远是空的。 */
+  backgroundTasks?: Record<string, BackgroundTaskLineTask[]>
   actionError?: string
   ctfSection: CTFWorkspaceSection
   accountStatus: AccountStatus
@@ -344,6 +359,7 @@ export default function ContextSidebar({
   )
   const codingGroups = groupWorkspaceConversations(conversations, workspaceHome)
   const runningConversationIds = new Set(runningIdsProp ?? [])
+  const problemConversationIds = new Set(problemIdsProp ?? [])
   // 待决策直接从 conversations 里算（它本来就拿到了 messages）——少一层 prop 管线，也不用 App 另传。
   const needsDecisionConversationIds = new Set(needsDecisionConversationIdsFrom(conversations))
   const projectGroups = codingGroups.filter(group => !group.temporary && !group.flat)
@@ -759,14 +775,37 @@ export default function ContextSidebar({
             }}
           >
             <span className="coding-session-status">
-              {needsDecisionConversationIds.has(conversation.id) ? (
-                // 待决策优先于运行中：它同时在跑、又在等人拍板时，读者最需要知道的是“轮到我”。
-                <AgentDecisionMark />
-              ) : runningConversationIds.has(conversation.id) ? (
-                <AgentLiveStatus label={t('运行中', 'Running')} compact />
-              ) : unreadConversationIds.has(conversation.id) ? (
-                <span className="coding-session-complete size-1.5 rounded-full bg-primary" aria-label={t('有新消息', 'New messages')} />
-              ) : null}
+              {/* 状态位五选一，严格互斥（待决策 > 运行中 > 后台任务 > 红叉 > 未读）。
+                  红叉排第四：会话有任何「活迹象」（待决策/回合在跑/后台任务）时它让位，
+                  只有一切静止时才亮——它是「上一轮出过事」的墓碑，不是「现在正在出事」。 */}
+              {(() => {
+                const statusMark = resolveSessionStatusMark({
+                  needsDecision: needsDecisionConversationIds.has(conversation.id),
+                  running: runningConversationIds.has(conversation.id),
+                  hasBackgroundTask: (backgroundTasks?.[conversation.id]?.length ?? 0) > 0,
+                  problem: problemConversationIds.has(conversation.id),
+                  unread: unreadConversationIds.has(conversation.id),
+                })
+                // 待决策优先于运行中：它同时在跑、又在等人拍板时，读者最需要知道的是「轮到我」。
+                return statusMark === 'decision' ? (
+                  <AgentDecisionMark />
+                ) : statusMark === 'running' ? (
+                  <AgentPixelLoader label={t('运行中', 'Running')} running compact />
+                ) : statusMark === 'background' ? (
+                  // 后台任务只给「还有东西在跑」这一个事实（不显示任务名/件数，详情在对话里说）。
+                  <AgentBackgroundTaskMark />
+                ) : statusMark === 'problem' ? (
+                  <AgentDecisionMark variant="problem" />
+                ) : statusMark === 'unread' ? (
+                  // 未读：一个方形点 —— 单个方块，尺寸/圆角复用九格单格（`.agent-pixel__cell`），
+                  // DOM 里只有这一个方块，不再是小圆点。
+                  <span
+                    className="agent-pixel__cell agent-pixel__cell--unread"
+                    role="status"
+                    aria-label={t('有新消息', 'New messages')}
+                  />
+                ) : null
+              })()}
             </span>
             <span className="flex size-5 shrink-0" aria-hidden="true" />
             <span className={`agent-sidebar__copy ml-1.5 min-w-0 flex-1 truncate text-label ${activeConversationId === conversation.id ? 'font-medium text-foreground' : 'font-normal text-muted-foreground'}`}>{conversation.title}</span>

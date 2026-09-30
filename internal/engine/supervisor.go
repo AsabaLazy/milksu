@@ -146,6 +146,7 @@ type Event struct {
 	Grantable          bool                     `json:"grantable,omitempty"`
 	Justification      *ApprovalJustification   `json:"justification,omitempty"`
 	Notice             string                   `json:"notice,omitempty"`
+	NoticeEnglish      string                   `json:"noticeEnglish,omitempty"`
 	Choice             string                   `json:"choice,omitempty"`
 	BackgroundTasks    []BackgroundTask         `json:"backgroundTasks,omitempty"`
 	SubagentTasks      []SubagentTask           `json:"subagentTasks,omitempty"`
@@ -406,6 +407,7 @@ type bridgeEvent struct {
 	Approved           *bool                    `json:"approved"`
 	Grantable          bool                     `json:"grantable"`
 	Notice             string                   `json:"notice"`
+	NoticeEnglish      string                   `json:"noticeEnglish"`
 	Justification      *ApprovalJustification   `json:"justification"`
 	Choice             string                   `json:"choice"`
 	Tasks              []BackgroundTask         `json:"tasks"`
@@ -3754,6 +3756,7 @@ func normalizeBridgeEvent(raw bridgeEvent, kernels ...string) Event {
 		Approved:           raw.Approved,
 		Grantable:          raw.Grantable,
 		Notice:             raw.Notice,
+		NoticeEnglish:      raw.NoticeEnglish,
 		Justification:      raw.Justification,
 		Choice:             raw.Choice,
 		BackgroundTasks:    raw.Tasks,

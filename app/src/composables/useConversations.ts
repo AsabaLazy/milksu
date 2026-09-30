@@ -1,4 +1,9 @@
 import { createStore, nextTick } from '@/lib/reactStore'
+import {
+  outcomeForTasks,
+  runningTasks,
+  type BackgroundTaskOutcome,
+} from '@/lib/backgroundStripDigest'
 import { invokeCommand, listenEvent } from '@/desktop'
 import type { CodingCompactionResult } from '@/codingEnvironmentTypes'
 import {
@@ -479,6 +484,22 @@ function normalizeLastContextUsage(raw: unknown): Conversation['lastContextUsage
   }
 }
 
+/** 落盘的「上一轮出过事」记录（横幅 + 侧栏红叉靠它，重启后仍要显示）。
+ *  形状不对 / 两条都空 ⇒ undefined（当作没有），别把半个对象塞进界面。 */
+function normalizeAgentProblem(value: unknown): Conversation['agentProblem'] {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+  const notice = typeof raw.notice === 'string' ? raw.notice.trim() : ''
+  const noticeEnglish = typeof raw.noticeEnglish === 'string' ? raw.noticeEnglish.trim() : ''
+  if (!notice && !noticeEnglish) return undefined
+  const at = Number(raw.at)
+  return {
+    notice: notice || undefined,
+    noticeEnglish: noticeEnglish || undefined,
+    at: Number.isFinite(at) ? at : undefined,
+  }
+}
+
 export function normalizeConversation(raw: Record<string, unknown>): Conversation {
   const messages = (raw.messages as Record<string, unknown>[] | undefined) ?? []
   return {
@@ -513,6 +534,8 @@ export function normalizeConversation(raw: Record<string, unknown>): Conversatio
       : undefined,
     executionMode: normalizeCodingExecutionMode(raw.executionMode),
     approvalPolicy: normalizeCodingApprovalPolicy(raw.approvalPolicy),
+    // 落盘的「出过事」记录必须活过这一层：这里**逐字段挑**，漏一个字段就等于重启后丢。
+    agentProblem: normalizeAgentProblem(raw.agentProblem),
     mcpServers: normalizeMCPServers(raw.mcpServers),
     mcpConfigDigest: /^[a-f0-9]{64}$/i.test(String(raw.mcpConfigDigest ?? ''))
       ? String(raw.mcpConfigDigest).toLowerCase()
@@ -975,6 +998,15 @@ export function projectCodingRunFinished(
 }
 
 
+/** 该对话的**上一轮出过事**（运行失败 / 守卫示警）。
+ *  读者口径：顶部常驻横幅（放在「批准」那个位置）+ 侧栏红叉，
+ *  **直到该对话开新一回合或点「知道了」**才消。 */
+export interface ProblemTurn {
+  notice: string
+  noticeEnglish: string
+  at: number
+}
+
 type ConversationsState = {
   conversations: Conversation[]
   activeId: string | null
@@ -1001,6 +1033,10 @@ type ConversationsState = {
   engineNoticeAt: number
   abortStalledIds: Set<string>
   stalledQueueIds: Set<string>
+  problemTurns: Record<string, ProblemTurn>
+  backgroundTasks: Record<string, Array<{ id: string; name: string; status: string }>>
+  /** 窄带专用的**终态**（只增不改：侧栏标记与轮询读的是 backgroundTasks，绝不把终态塞进去）。 */
+  backgroundTaskOutcome: Record<string, BackgroundTaskOutcome>
   runningTools: Map<string, Set<string>>
   heartbeatTick: number
   continuity: CodingContinuityState
@@ -1062,6 +1098,9 @@ export function createConversationsRuntime(options?: {
     engineNoticeAt: 0,
     abortStalledIds: new Set<string>(),
     stalledQueueIds: new Set<string>(),
+    problemTurns: {},
+    backgroundTasks: {},
+    backgroundTaskOutcome: {},
     runningTools: new Map<string, Set<string>>(),
     heartbeatTick: 0,
     continuity: createCodingContinuityState(),
@@ -1133,6 +1172,11 @@ export function createConversationsRuntime(options?: {
     set abortStalledIds(value) { store.setState({ abortStalledIds: value }) },
     get stalledQueueIds() { return store.getState().stalledQueueIds },
     set stalledQueueIds(value) { store.setState({ stalledQueueIds: value }) },
+    get problemTurns() { return store.getState().problemTurns },
+    set problemTurns(value) { store.setState({ problemTurns: value }) },
+    get backgroundTasks() { return store.getState().backgroundTasks },
+    get backgroundTaskOutcome() { return store.getState().backgroundTaskOutcome },
+    set backgroundTasks(value) { store.setState({ backgroundTasks: value }) },
     get continuity() { return store.getState().continuity },
     set continuity(value) { store.setState({ continuity: value }) },
     get turnStatusById() { return store.getState().turnStatusById },
@@ -1337,6 +1381,184 @@ export function createConversationsRuntime(options?: {
     if (stalled) next.add(id)
     else next.delete(id)
     s.stalledQueueIds = next
+  }
+
+  /** 把某个对话标成「上一轮出过事」：顶部常驻横幅 + 侧栏红叉（静止时才亮，见侧栏状态位）。 */
+  function markProblemTurn(conversationId: string, notice: string, noticeEnglish: string) {
+    const id = String(conversationId ?? '').trim()
+    if (!id) return
+    const at = Date.now()
+    s.problemTurns = {
+      ...s.problemTurns,
+      [id]: { notice, noticeEnglish, at },
+    }
+    // **同时写进对话对象**：前端每次都用整份对象调 `save_conversation`，
+    // 而对象里没有这个字段的话，会把引擎刚落盘的那份**抹掉**。
+    s.conversations = s.conversations.map(item => (
+      item.id === id
+        ? { ...item, agentProblem: { notice, noticeEnglish, at } }
+        : item
+    ))
+  }
+
+  /** 清除某个对话的「上一轮出过事」标记（开新一回合时调）。 */
+  function clearProblemTurn(conversationId: string) {
+    const id = String(conversationId ?? '').trim()
+    if (!id) return
+    if (s.problemTurns[id]) {
+      const next = { ...s.problemTurns }
+      delete next[id]
+      s.problemTurns = next
+    }
+    // 开新一回合时引擎也会清记录；这里同步一份，界面不用等列表刷新。
+    dropStoredProblemTurn(id)
+  }
+
+  /** 顶部横幅上的「知道了」：读者点掉 ⇒ 该对话的问题标记立即消失（侧栏红叉同时灭）。 */
+  function dismissProblemTurn(conversationId?: string) {
+    const id = String(conversationId ?? s.activeId ?? '').trim()
+    clearProblemTurn(id)
+    if (!id) return
+    // 落盘那份也要清，否则重开 App 横幅又回来（读者点的是「知道了」，不是「下次再说」）。
+    dropStoredProblemTurn(id)
+    void invokeCommand('clear_conversation_problem', { conversationId: id }).catch(() => {})
+  }
+
+  /** 把记录里的 agentProblem 就地抹掉（本地立刻一致，随后列表刷新再对齐）。 */
+  function dropStoredProblemTurn(id: string) {
+    const key = String(id ?? '').trim()
+    if (!key) return
+    let changed = false
+    const next = s.conversations.map(item => {
+      if (item.id !== key || !item.agentProblem) return item
+      changed = true
+      return { ...item, agentProblem: undefined }
+    })
+    if (changed) s.conversations = next
+  }
+
+  /** 落盘那份（重启后仍然在）⇒ 转成与内存同形的 ProblemTurn。 */
+  function storedProblemTurn(record: Conversation | undefined) {
+    const problem = record?.agentProblem
+    if (!problem) return null
+    const notice = String(problem.notice ?? '').trim()
+    const noticeEnglish = String(problem.noticeEnglish ?? '').trim()
+    if (!notice && !noticeEnglish) return null
+    return { notice: notice || noticeEnglish, noticeEnglish: noticeEnglish || notice, at: Number(problem.at ?? 0) }
+  }
+
+  /** 该对话当前的标记：**内存里的即时覆盖优先**（事件刚到，列表还没刷新）⇒ 回落记录。 */
+  function problemTurnFor(id: string): ProblemTurn | null {
+    const key = String(id ?? '').trim()
+    if (!key) return null
+    return s.problemTurns[key] ?? storedProblemTurn(s.conversations.find(item => item.id === key))
+  }
+
+  const activeProblemTurn = (() => (s.activeId ? problemTurnFor(s.activeId) : null))
+
+  /** 侧栏红叉的判据：出过事就有。 */
+  function conversationHasProblem(id: string) {
+    return Boolean(problemTurnFor(id))
+  }
+
+  /** 出过事的对话（侧栏红叉靠它）。开新一回合或点「知道了」即清。 */
+  const problemConversationIds = (() => {
+    const ids = new Set(Object.keys(s.problemTurns))
+    for (const item of s.conversations) {
+      if (storedProblemTurn(item)) ids.add(item.id)
+    }
+    return [...ids]
+  })
+
+  // ---- 后台任务（打包/verify 那类）----
+  // 任务**自己结束**不会再触发工具调用 ⇒ 侧车不会再发事件 ⇒ 界面会永远停在上一次的
+  // 「仍在运行」。有任务在跑时**轻量轮询**现成的刷新命令（首查 2 秒、之后 10 秒一次、
+  // 连续两次查空即停 ⇒ 有界）：刷新让引擎重读登记表并回发同一个事件。
+  // 轮询**每次都会触发整树重渲染**（App 把 backgroundTasks 传给 ChatPage）⇒ 既要
+  // 「没变就不写」，又要保守的间隔。
+  const BACKGROUND_TASK_REFRESH_MS = 10000
+  // 任务刚结束时最容易被看到「还挂着」（读者看到的是上一秒的事实）⇒ 先**快查一次**。
+  const BACKGROUND_TASK_REFRESH_FIRST_MS = 2000
+  let backgroundTaskRefreshTimer: ReturnType<typeof setInterval> | undefined
+  let backgroundTaskRefreshFirst: ReturnType<typeof setTimeout> | undefined
+  // 引擎侧对「刚起来的任务」可能还没登记 ⇒ 单次「空」不能当数（否则标记被提前擦掉）。
+  let backgroundRefreshEmptyStreak = 0
+  function stopBackgroundTaskRefresh() {
+    backgroundRefreshEmptyStreak = 0
+    if (backgroundTaskRefreshTimer !== undefined) {
+      clearInterval(backgroundTaskRefreshTimer)
+      backgroundTaskRefreshTimer = undefined
+    }
+    if (backgroundTaskRefreshFirst !== undefined) {
+      clearTimeout(backgroundTaskRefreshFirst)
+      backgroundTaskRefreshFirst = undefined
+    }
+  }
+  function scheduleBackgroundTaskRefresh(hasRunning: boolean, sessionId: string) {
+    if (!hasRunning) {
+      stopBackgroundTaskRefresh()
+      return
+    }
+    if (backgroundTaskRefreshTimer !== undefined || backgroundTaskRefreshFirst !== undefined) return
+    const runRefresh = () => {
+      // ⚠️ 这个命令**必须带会话**：引擎侧 `RefreshBackgroundTasks` 在 sessionID 为空时直接返回
+      // `session id is required`；没传参 ⇒ 每次都失败、又被静默吞掉 ⇒ 状态区永远停在「仍在运行」。
+      const conversation = store.getState().conversations.find(item => item.id === sessionId)
+      invokeCommand<{ backgroundTasks?: Array<{ id?: string; name?: string; status?: string }> }>(
+        'refresh_coding_background_tasks',
+        { conversationId: sessionId, workspacePath: conversation?.workspacePath ?? '' },
+      ).then(status => {
+        const all = status?.backgroundTasks ?? []
+        const running = all
+          .filter(task => String(task?.status ?? '') === 'running')
+          .map(task => ({
+            id: String(task?.id ?? ''),
+            name: String(task?.name ?? ''),
+            status: String(task?.status ?? ''),
+          }))
+        // 同一条口径：这一次查完，在跑集合**从非空变空** ⇒ 用完整列表算终态（窄带据此显示 15 秒）。
+        const hadRunning = (store.getState().backgroundTasks[sessionId] ?? []).length > 0
+        const settled = hadRunning && running.length === 0 ? outcomeForTasks(all, Date.now()) : null
+        // **没变就不写**：无条件写会换掉 backgroundTasks 的对象身份 ⇒ App 把它传给 ChatPage
+        // ⇒ 整棵树每次轮询都重渲染（真机回归：流式「吐不全 / 思考阶段卡死」）。
+        // 逐项比较（长度、顺序、id/name/status）完全一致、且没有新终态要写 ⇒ **连一次写都不做**。
+        const current = store.getState().backgroundTasks[sessionId] ?? []
+        const unchanged = current.length === running.length
+          && current.every((task, index) => (
+            task.id === running[index]?.id
+            && task.name === running[index]?.name
+            && task.status === running[index]?.status
+          ))
+        if (!unchanged || settled) {
+          // 有变化才写；语义不变（只增不改：终态仍写进 backgroundTaskOutcome）。
+          markBackgroundTaskSettled({ sessionId, tasks: running, settled })
+        }
+        if (running.length === 0) {
+          // 连续两次空才清零 ⇒ 既不误擦刚起来的任务，真结束了也能及时收。
+          backgroundRefreshEmptyStreak += 1
+          if (backgroundRefreshEmptyStreak >= 2) stopBackgroundTaskRefresh()
+        } else {
+          backgroundRefreshEmptyStreak = 0
+        }
+      }).catch(() => undefined)
+    }
+    backgroundTaskRefreshFirst = setTimeout(runRefresh, BACKGROUND_TASK_REFRESH_FIRST_MS)
+    backgroundTaskRefreshTimer = setInterval(runRefresh, BACKGROUND_TASK_REFRESH_MS)
+  }
+
+  function markBackgroundTaskSettled(input: {
+    sessionId: string
+    tasks: { id: string; name: string; status: string }[]
+    settled: BackgroundTaskOutcome | null
+  }) {
+    const { sessionId, tasks, settled } = input
+    store.setState(state => ({
+      ...state,
+      backgroundTasks: { ...state.backgroundTasks, [sessionId]: tasks },
+      ...(settled
+        ? { backgroundTaskOutcome: { ...state.backgroundTaskOutcome, [sessionId]: settled } }
+        : {}),
+    }))
   }
   const compactionErrorTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -1789,6 +2011,18 @@ export function createConversationsRuntime(options?: {
       if (snapshot) next.set(conversation.id, snapshot)
     }
     s.turnStatusById = next
+    // 后台任务：推送事件只在**变化时**来 ⇒ 重启后若已有任务在跑，在它下次变化前不会有事件，
+    // 那一刻「回合结束」就漏报。所以**列表就绪后主动拉一次**（只一次，不轮询）。
+    // ⚠️ 必须带会话参数（引擎侧 sessionID 为空会直接报 `session id is required`）。
+    // 失败静默（拉不到就不提示，别打扰读者）。
+    const pullSessionId = s.activeId || s.conversations[0]?.id || ''
+    if (pullSessionId) {
+      const pull = s.conversations.find(item => item.id === pullSessionId)
+      void invokeCommand('refresh_coding_background_tasks', {
+        conversationId: pullSessionId,
+        workspacePath: pull?.workspacePath ?? '',
+      }).catch(() => undefined)
+    }
   }
 
   function currentWorkspaceHome(): WorkspaceHome {
@@ -3460,6 +3694,63 @@ export function createConversationsRuntime(options?: {
       } else if (type === 'tool.completed') {
         noteToolRunning(sessionId, toolCallId, toolName, false)
       }
+      // 新一回合开始了 ⇒ 上一轮「出过事」的标记到此为止（读者口径）。
+      // 放在入口：这条标记属于**会话**，不该依赖它此刻是否在会话列表里。
+      if (type === 'assistant.started') clearProblemTurn(String(sessionId ?? ''))
+      // 「Agent 运行失败」= 这一轮没能正常继续 ⇒ 顶部常驻横幅 + 侧栏红叉（开新一回合才消）。
+      // 放在入口：这条标记属于**会话**，不该依赖它此刻是否在会话列表里。
+      // 用户主动停下（aborted/cancelled）不算问题：那不是「没能继续」，那是他要的。
+      if (type === 'engine.error') {
+        const failed = agentEngineErrorBubble(error, {
+          provider: String(provider ?? '').trim(),
+          model: String(model ?? '').trim(),
+          source: String(modelSource ?? '').trim(),
+          message: String(message ?? '').trim(),
+        })
+        if (!failed.stopped) markProblemTurn(String(sessionId ?? ''), failed.content, failed.content)
+      }
+      // 守卫示警（思考复读等）同样放在入口：上屏 + 标记都不该依赖会话是否在列表里。
+      if (type === 'guard.alarm') {
+        // 引擎给中英两句，这里按界面语言选一句 ⇒ 读者看得见（绝不静默吞掉）。
+        const payload = event.payload as unknown as { notice?: string; noticeEnglish?: string }
+        const chinese = String(payload?.notice ?? '').trim()
+        const english = String(payload?.noticeEnglish ?? '').trim()
+        if (chinese || english) {
+          pushEngineNotice(t(chinese || english, english || chinese))
+          // 守卫示警也是「这一轮出了问题」（报错不能埋在对话末尾）⇒ 顶部常驻横幅 + 侧栏红叉。
+          markProblemTurn(String(sessionId ?? ''), chinese || english, english || chinese)
+        }
+        return
+      }
+      if (type === 'background_tasks' || type === 'runtime.background_tasks') {
+        // 后台任务（打包/verify 那类）**不在** runningIds/turnStatus 里 ⇒ 回合结束时界面会像
+        // 「完事了」。这里订阅侧车已有的 `background_tasks` 事件，把事实存进状态。
+        // ⚠️ 必须两个名字都认：引擎在 `supervisor.go` 里把侧车名改写成 `runtime.background_tasks`
+        // （与 subagent_tasks/dsh_jobs/compaction_* 同一张改名表），只认旧名字就会**静默收不到**。
+        // ⚠️ 字段名要两个都读：侧车发 `{ tasks: … }`，引擎把它解进 `Event.BackgroundTasks`
+        // （json 标签是 `backgroundTasks`）再转给渲染层 ⇒ 只读 `tasks` 会永远得到空数组。
+        const tasksPayload = (event.payload ?? {}) as { tasks?: unknown; backgroundTasks?: unknown }
+        const rawTasks = Array.isArray(tasksPayload.tasks)
+          ? tasksPayload.tasks
+          : (Array.isArray(tasksPayload.backgroundTasks) ? tasksPayload.backgroundTasks : [])
+        const tasks = rawTasks as Array<{ id?: unknown; name?: unknown; status?: unknown }>
+        const id = String(sessionId ?? '').trim()
+        if (!id) return
+        // 有任务在跑 ⇒ 开轮询；全清 ⇒ 停（任务自己结束时不会再有工具调用事件）。
+        scheduleBackgroundTaskRefresh(rawTasks.length > 0, id)
+        const running = runningTasks(tasks)
+        // 事实层（**只留在跑的**，与侧栏标记/轮询的语义一致）。
+        const kept = running.map(task => ({
+          id: String((task as { id?: unknown })?.id ?? ''),
+          name: String(task?.name ?? ''),
+          status: String(task?.status ?? ''),
+        }))
+        const hadRunning = (store.getState().backgroundTasks[id] ?? []).length > 0
+        // 终态：**在跑集合从非空变空**那一刻，用**过滤前的完整列表**判（窄带终态行的口径）。
+        const settled = hadRunning && kept.length === 0 ? outcomeForTasks(tasks, Date.now()) : null
+        markBackgroundTaskSettled({ sessionId: id, tasks: kept, settled })
+        return
+      }
       if (!sessionId && (type === 'engine.stopped' || type === 'engine.protocol_error')) {
         // Scope the stop to the sessions the stopped engine instance actually
         // served. Without that identity there is nothing safe to notify: a
@@ -3997,13 +4288,6 @@ export function createConversationsRuntime(options?: {
           const payload = event.payload as unknown as { notice?: string; message?: string }
           const text = String(payload?.notice ?? payload?.message ?? '').trim()
           if (text) pushEngineNotice(text)
-        } else if (type === 'guard.alarm') {
-          // 引擎的守卫示警（本条 PR 由思考复读护栏首次发出；以后别的守卫复用此名时，
-          // 载荷必须保持同一形状）：引擎给中英两句，这里按界面语言选一句 ⇒ 读者看得见（绝不静默吞掉）。
-          const payload = event.payload as unknown as { notice?: string; noticeEnglish?: string }
-          const chinese = String(payload?.notice ?? '').trim()
-          const english = String(payload?.noticeEnglish ?? '').trim()
-          if (chinese || english) pushEngineNotice(t(chinese || english, english || chinese))
         } else if (type === 'engine.error') {
           const erroredQueue = s.messageQueues.get(sessionId)
           if (erroredQueue?.steering.length) {
@@ -4149,6 +4433,12 @@ export function createConversationsRuntime(options?: {
     get workspacePath() { return workspacePath() },
     get activeRunning() { return activeRunning() },
     get runningConversationIds() { return runningConversationIds() },
+    get problemConversationIds() { return problemConversationIds() },
+    conversationHasProblem,
+    dismissProblemTurn,
+    get activeProblemTurn() { return activeProblemTurn() },
+    get backgroundTasks() { return s.backgroundTasks },
+    get backgroundTaskOutcome() { return s.backgroundTaskOutcome },
     get activeAborting() { return activeAborting() },
     get activeAbortStalled() { return activeAbortStalled() },
     get activeMessageQueue() { return activeMessageQueue() },

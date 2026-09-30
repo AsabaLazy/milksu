@@ -689,7 +689,6 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
   // Quoted material the reader picked in the transcript: shown above the input while they type the
   // question it belongs to, and persisted per conversation exactly like the draft.
   const [quotes, setQuotes] = useState<ComposerQuote[]>([])
-  const [inputStacked, setInputStacked] = useState(false)
   const quotesRef = useRef<ComposerQuote[]>([])
   const composerFrame = useRef<HTMLDivElement | null>(null)
   const messageEditor = useRef<HTMLDivElement | null>(null)
@@ -1329,34 +1328,10 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
     detectSlashQuery()
   }
 
-  useLayoutEffect(() => {
-    const editor = messageEditor.current
-    if (!editor) return
-    const text = [...editor.childNodes].map(node => (
-      node instanceof HTMLElement && node.dataset.composerQuote ? '' : (node.textContent ?? '')
-    )).join('').replace(/\u00a0/g, ' ').replace(/\n$/u, '')
-    let stacked = text.includes('\n')
-    if (!stacked && text.trim()) {
-      const range = document.createRange()
-      const tops = new Set<number>()
-      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT)
-      let current = walker.nextNode()
-      while (current) {
-        const parent = current.parentElement
-        if (!parent?.closest('[data-composer-quote]') && current.textContent?.trim()) {
-          range.selectNodeContents(current)
-          for (const rect of range.getClientRects()) {
-            if (rect.width < 1 || rect.height < 1) continue
-            tops.add(Math.round(rect.top))
-          }
-        }
-        current = walker.nextNode()
-      }
-      stacked = tops.size > 1
-    }
-    setInputStacked(current => current === stacked ? current : stacked)
-  }, [draft, pendingAttachments.length, quotes.length])
-
+  // 这里原本有一个「按内容折成几行」来切换输入区形态（bar ⇄ stack）的 useLayoutEffect。
+  // **已删除**：bar 形态下输入框只占网格第 2 列、stack 形态下横跨整行 ⇒ 两种形态**文字可用宽度不同**,
+  // 于是一旦文字正好卡在换行边界，就会出现「折行 → 切宽形态 → 又回到一行 → 切回窄形态」的**无限振荡**
+  // （真机反馈：每打一个字输入框疯狂跳动）。现在形态固定为 stack，判定与宽度都稳定。
   function removeSlashQueryText() {
     rememberComposerSnapshot()
     const range = slashQueryRange.current
@@ -2004,7 +1979,8 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
 
           <form
             className="chat-composer__island"
-            data-shape={inputStacked || pendingAttachments.length > 0 ? 'stack' : 'bar'}
+            // 形态**固定 stack**：不再按折行数切换（那会让文字宽度随形态变化 ⇒ 无限振荡/跳动）。
+            data-shape="stack"
             onSubmit={event => { event.preventDefault(); submit() }}
           >
             <div className="chat-composer__pill" aria-hidden="true" />
