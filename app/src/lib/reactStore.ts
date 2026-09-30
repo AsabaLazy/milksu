@@ -18,11 +18,26 @@ function sameState<T extends object>(previous: T, next: T): boolean {
   return true
 }
 
-export function createStore<T extends object>(initial: T): Store<T> {
+export interface StoreOptions {
+  /**
+   * 自定义「通知订阅者（即 React 重新渲染）」的时机。
+   *
+   * 关键：`getState()` 永远**同步**返回最新状态，业务逻辑不受影响；被合并的只是订阅者通知。
+   * 流式增量场景里，一帧内到多次写状态时会合并成一次 React 渲染，避免主线程被喂满。
+   * 返回一个取消函数（生产环境一般用不上，卸载时可调用）。
+   */
+  schedulePublish?: (flush: () => void) => () => void
+}
+
+export function createStore<T extends object>(
+  initial: T,
+  options?: StoreOptions,
+): Store<T> {
   let state = initial
   const listeners = new Set<() => void>()
   let publishing = false
   let queued = false
+  let publishScheduled = false
 
   function publish() {
     if (publishing) {
@@ -40,6 +55,19 @@ export function createStore<T extends object>(initial: T): Store<T> {
     }
   }
 
+  function notify() {
+    if (!options?.schedulePublish) {
+      publish()
+      return
+    }
+    if (publishScheduled) return
+    publishScheduled = true
+    options.schedulePublish(() => {
+      publishScheduled = false
+      publish()
+    })
+  }
+
   return {
     getState() {
       return state
@@ -48,7 +76,7 @@ export function createStore<T extends object>(initial: T): Store<T> {
       const next = typeof updater === 'function' ? updater(state) : { ...state, ...updater }
       if (sameState(state, next)) return
       state = next
-      publish()
+      notify()
     },
     subscribe(listener) {
       listeners.add(listener)

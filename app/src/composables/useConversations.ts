@@ -1046,6 +1046,18 @@ export function createConversationsRuntime(options?: { live?: boolean }) {
     conversationActionError: '',
     pendingComposerDraft: null,
     conversationActionIds: new Set<string>(),
+  }, {
+    // 第五单：流式爆发期把一帧内的多次状态写入合并成**一次** React 渲染。
+    // 注意状态本身仍然同步更新（getState/各 getter 立刻可见，业务逻辑与测试断言不受影响），
+    // 被合并的只是“通知订阅者重新渲染”。真机上这叫从「每个 delta 一次整页渲染」变成「每帧一次」。
+    schedulePublish: (flush) => {
+      if (typeof requestAnimationFrame === 'function') {
+        const frame = requestAnimationFrame(flush)
+        return () => cancelAnimationFrame(frame)
+      }
+      const timer = setTimeout(flush, 0)
+      return () => clearTimeout(timer)
+    },
   })
   const s = {
     get conversations() { return store.getState().conversations },

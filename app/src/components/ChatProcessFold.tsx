@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import ChatActivityGroup from '@/components/ChatActivityGroup'
 import ChatMessageItem from '@/components/ChatMessageItem'
 import ChatWorkFold from '@/components/ChatWorkFold'
@@ -11,7 +11,7 @@ import {
 import type { ChatFoldModel } from '@/lib/chatWorkStatus'
 import type { SubagentTask } from '@/types'
 
-export default function ChatProcessFold({
+function ChatProcessFold({
   process,
   model,
   recoverableFailureId,
@@ -76,8 +76,8 @@ export default function ChatProcessFold({
               openEntryIds={activityOpenEntries(item.id)}
               subagentTasks={subagentTasks}
               revealCompleted
-              onToggleGroup={open => onToggleGroup?.(item.id, open)}
-              onToggleEntry={(entryId, open) => onToggleEntry?.(item.id, entryId, open)}
+              onToggleGroup={onToggleGroup}
+              onToggleEntry={onToggleEntry}
               onOpenSubagent={onOpenSubagent}
             />
           ) : (
@@ -100,3 +100,5 @@ export default function ChatProcessFold({
     </ChatWorkFold>
   )
 }
+
+export default memo(ChatProcessFold)

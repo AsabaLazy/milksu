@@ -311,8 +311,12 @@ export function detailsToggleOpen(event: { target: EventTarget | null; currentTa
   return typeof details?.open === 'boolean' ? details.open : undefined
 }
 
-export function buildChatTranscript(
-  messages: Message[],
+/**
+ * 未折叠的回合块。`buildChatTranscript` 与增量构建器共用这一段，保证两条路
+ * 逐字节同义（只有最后那一次 `foldChatTranscriptProcess` 分开做）。
+ */
+function buildChatTurnBlocks(
+  messages: readonly Message[],
   conversationRunning: boolean,
 ): ChatTranscriptBlock[] {
   const blocks: ChatTranscriptBlock[] = []
@@ -353,7 +357,44 @@ export function buildChatTranscript(
   }
   flush()
 
-  return foldChatTranscriptProcess(blocks)
+  return blocks
+}
+
+/**
+ * 「只是尾部消息被换了一段内容」：长度不变，且前面每一条都还是同一个对象。
+ * 流式的 `assistant.delta` / `thinking_delta` 都长这样。
+ *
+ * 用途：`conversationFileDiffs` / `extractLatestComputerUseOperationEvidence` 这类
+ * **按全量消息聚合**的派生值，不必为一次正文增量重扫 2 万条消息 —— 打字不会多出一次编辑、
+ * 也不会多出一条 computer-use 证据。判定本身只做对象身份比较（万条级 ~0.03ms）。
+ */
+export function isContentOnlyMessageChange(
+  previous: readonly Message[],
+  next: readonly Message[],
+): boolean {
+  if (previous.length !== next.length) return false
+  for (let index = 0; index < next.length - 1; index += 1) {
+    if (previous[index] !== next[index]) return false
+  }
+  return true
+}
+
+/** 转写里最后一个**真正显示**的用户消息下标（排队中的不算；没有则 -1）。 */
+function lastRenderedUserIndex(messages: readonly Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message || message.role !== 'user') continue
+    if (message.status === 'queued') continue
+    return index
+  }
+  return -1
+}
+
+export function buildChatTranscript(
+  messages: Message[],
+  conversationRunning: boolean,
+): ChatTranscriptBlock[] {
+  return foldChatTranscriptProcess(buildChatTurnBlocks(messages, conversationRunning))
 }
 
 export function isThinkingOnlyAssistant(message: Message) {
@@ -424,22 +465,29 @@ function messageHasThinking(message: Message) {
 
 // Only the latest finished thinking stays open. A live burst stays open too.
 // When the next burst finishes, the previous one collapses.
+// 实现注意：单次扫描（不复用 `latestFinishedThinkingId` 的循环，避免两遍），
+// 但**渲染循环不要逐段调它**（段落数 × 全表长 = O(n²)）——调用点应先
+// `latestFinishedThinkingId(blocks)` 预计算一次，再逐段 O(1) 比较。
 export function thinkingStaysOpen(messageId: string, blocks: readonly ChatTranscriptBlock[]) {
-  const thoughts: Message[] = []
+  let seenRunning = false
+  let seenFinished = false
+  let finishedAfter = false
   for (const block of blocks) {
-    if (block.kind === 'message' && messageHasThinking(block.message)) {
-      thoughts.push(block.message)
+    if (block.kind !== 'message' || !messageHasThinking(block.message)) continue
+    const message = block.message
+    if (message.id === messageId) {
+      if (message.thinkingStatus === 'running') seenRunning = true
+      else if (message.thinkingStatus === 'done' && Boolean(String(message.thinking ?? '').trim())) seenFinished = true
+      continue
+    }
+    if ((seenRunning || seenFinished) && message.thinkingStatus === 'done' && Boolean(String(message.thinking ?? '').trim())) {
+      finishedAfter = true
     }
   }
-  const index = thoughts.findIndex(item => item.id === messageId)
-  if (index < 0) return false
-  const message = thoughts[index]!
-  if (message.thinkingStatus === 'running') return true
-  return !thoughts.slice(index + 1).some(item => (
-    item.thinkingStatus === 'done' && Boolean(String(item.thinking ?? '').trim())
-  ))
+  if (seenRunning) return true
+  if (!seenFinished) return false
+  return !finishedAfter
 }
-
 export function latestFinishedThinkingId(blocks: readonly ChatTranscriptBlock[]) {
   let id = ''
   for (const block of blocks) {
@@ -590,6 +638,89 @@ export function chatTranscriptBlockMemoRefs(
     else refs.push(inner.running, ...inner.messages)
   }
   return refs
+}
+
+function sameMemoRefs(first: readonly unknown[], second: readonly unknown[]): boolean {
+  return first.length === second.length
+    && first.every((value, index) => value === second[index])
+}
+
+/**
+ * 转写构建器（第五单改造）。两道保险：
+ *
+ * 1) **回合级增量**：`buildChatTranscript` 每个增量都从 2 万条消息重头扫一遍（含折叠前的
+ *    分块与 `foldChatTranscriptProcess`），万条级对话实测 ~6ms，叠加身份复用的 Map 开销
+ *    ~14ms/增量。流式只动**最后一个回合**，所以这里把「最后一个真正显示的用户消息」当作
+ *    回合边界：边界之前的前缀只在边界/内容变化时重建一次，每个增量只重建边界之后的尾巴。
+ *    折叠是逐回合独立的（`foldChatTranscriptProcess` 遇到 user 块就开新回合），
+ *    `fold(前缀) ++ fold(尾巴)` 与 `fold(全体)` 逐段同义。
+ *
+ * 2) **身份复用**：按块 id 记住上一次的块，只要这一块的**记忆引用**
+ *    （`chatTranscriptBlockMemoRefs`，只认消息对象身份）没变，就把旧对象还回去，
+ *    下游 `ChatProcessFold`/`ChatActivityGroup` 的 `memo` 才真正命中。
+ *
+ * 用法：每个 ChatPage 实例建一份（`useMemo(() => createChatTranscriptBuilder(), [])`），
+ * 不要放到模块级共享，否则跨会话互相污染缓存。
+ */
+export interface ChatTranscriptBuilder {
+  build(messages: Message[], conversationRunning: boolean): ChatTranscriptBlock[]
+}
+
+/** 前缀 [0, end) 是否与缓存逐条同身份。 */
+function sameMessagePrefix(
+  messages: readonly Message[],
+  cached: readonly Message[],
+  end: number,
+): boolean {
+  if (cached.length < end) return false
+  for (let index = 0; index < end; index += 1) {
+    if (messages[index] !== cached[index]) return false
+  }
+  return true
+}
+
+export function createChatTranscriptBuilder(): ChatTranscriptBuilder {
+  // 常量 sharedKey：块自己的渲染只由“这一块的内容”决定，sharedKey 那批开关（恢复失败、
+  // 可回退、折叠展开版本等）是以独立 prop 传进组件的，不该由这里决定块身份是否复用。
+  const REF_KEY = 'chatTranscriptBlock'
+  const previous = new Map<string, { refs: readonly unknown[]; block: ChatTranscriptBlock }>()
+  const stabilize = (blocks: ChatTranscriptBlock[]): ChatTranscriptBlock[] => blocks.map(block => {
+    const refs = chatTranscriptBlockMemoRefs(block, REF_KEY)
+    const cached = previous.get(block.id)
+    const reused = cached && sameMemoRefs(cached.refs, refs) ? cached.block : block
+    previous.set(block.id, { refs, block: reused })
+    return reused
+  })
+
+  // 前缀缓存：messages[0, prefixEnd) 的转写块（已折叠、已稳定）。
+  let prefixEnd = -1
+  let prefixMessages: readonly Message[] = []
+  let prefixBlocks: ChatTranscriptBlock[] = []
+  let sawMessages = false
+
+  return {
+    build(messages, conversationRunning) {
+      const lastUser = lastRenderedUserIndex(messages)
+      const boundary = lastUser < 0 ? 0 : lastUser
+      const reusePrefix = sawMessages
+        && prefixEnd === boundary
+        && sameMessagePrefix(messages, prefixMessages, boundary)
+
+      if (!reusePrefix) {
+        prefixBlocks = stabilize(foldChatTranscriptProcess(
+          buildChatTurnBlocks(messages.slice(0, boundary), conversationRunning),
+        ))
+        prefixMessages = messages
+        prefixEnd = boundary
+        sawMessages = true
+      }
+
+      const tailBlocks = stabilize(foldChatTranscriptProcess(
+        buildChatTurnBlocks(messages.slice(boundary), conversationRunning),
+      ))
+      return prefixBlocks.length ? prefixBlocks.concat(tailBlocks) : tailBlocks
+    },
+  }
 }
 
 

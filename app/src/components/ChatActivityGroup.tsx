@@ -1,4 +1,4 @@
-import { useMemo, useRef, type SyntheticEvent } from 'react'
+import { memo, useMemo, useRef, type SyntheticEvent } from 'react'
 import {
   AppWindow,
   FileText,
@@ -47,7 +47,7 @@ const TOOL_ICONS: Record<ReturnType<typeof agentToolIconKind>, LucideIcon> = {
   tool: Wrench,
 }
 
-export default function ChatActivityGroup({
+function ChatActivityGroup({
   activity,
   model,
   open,
@@ -64,8 +64,8 @@ export default function ChatActivityGroup({
   openEntryIds: ReadonlySet<string>
   revealCompleted?: boolean
   subagentTasks?: readonly SubagentTask[]
-  onToggleGroup?: (open: boolean) => void
-  onToggleEntry?: (entryId: string, open: boolean) => void
+  onToggleGroup?: (activityId: string, open: boolean) => void
+  onToggleEntry?: (activityId: string, entryId: string, open: boolean) => void
   onOpenSubagent?: (task: SubagentTask) => void
 }) {
   const t = useT()
@@ -99,7 +99,7 @@ export default function ChatActivityGroup({
       currentTarget: event.currentTarget,
     })
     if (nextOpen === undefined) return
-    onToggleEntry?.(entryId, nextOpen)
+    onToggleEntry?.(activity.id, entryId, nextOpen)
     if (nextOpen) reveal(entryDetails.current.get(entryId))
   }
 
@@ -185,9 +185,11 @@ export default function ChatActivityGroup({
     <ChatWorkFold
       model={model}
       open={open}
-      onToggle={next => onToggleGroup?.(next)}
+      onToggle={next => onToggleGroup?.(activity.id, next)}
     >
       {entries}
     </ChatWorkFold>
   )
 }
+
+export default memo(ChatActivityGroup)

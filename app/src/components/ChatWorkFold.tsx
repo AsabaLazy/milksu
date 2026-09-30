@@ -46,6 +46,12 @@ export default function ChatWorkFold({
   const t = useT()
   const [now, setNow] = useState(0)
   const controlled = onToggle !== undefined
+  // 收起时不挂载子内容（第五单）：真机里一个收起的大工具输出/markdown 全文有几十 KB，
+  // 现状是「DOM 里都挂着、只是 <details> 按 UA 样式隐藏」⇒ 每次挂载/重渲染都付全额布局与渲染费，
+  // RSS 也白白涨。这里用同一个开合信号做闸门：收起挂 null，点开那一刻才挂上。
+  // 受控（open/onToggle）用 prop，非受控（ChatProcessFold）在 onToggle 里镜像原生状态。
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const isOpen = controlled ? Boolean(open) : uncontrolledOpen
 
   useEffect(() => {
     if (!model.thinkingRunning || model.thinkingStartedAt == null) return undefined
@@ -66,12 +72,14 @@ export default function ChatWorkFold({
         className="agent-process__details"
         open={controlled ? open : undefined}
         onToggle={event => {
-          if (!onToggle) return
           const next = detailsToggleOpen({
             target: event.target,
             currentTarget: event.currentTarget,
           })
-          if (next !== undefined) onToggle(next)
+          // 嵌套的 <details>（工具条目）开合会冒泡上来，detailsToggleOpen 会把它们过滤成 undefined。
+          if (next === undefined) return
+          if (!controlled) setUncontrolledOpen(next)
+          onToggle?.(next)
         }}
       >
         <summary className="agent-process__summary">
@@ -83,7 +91,7 @@ export default function ChatWorkFold({
           <span className="agent-process__status">{statusLabel}</span>
           {totals ? <span className="agent-process__totals">{totals}</span> : null}
         </summary>
-        <div className="agent-process__body">{children}</div>
+        <div className="agent-process__body">{isOpen ? children : null}</div>
       </details>
       {model.liveLabel ? <ChatActivitySwap label={model.liveLabel} /> : null}
     </div>
