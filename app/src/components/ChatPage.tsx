@@ -2267,12 +2267,14 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
       element.clientHeight,
       element.scrollHeight,
     )
-    if (chatAutoScrollPinned.current && !nextPinned) {
-      // 刚从底部翻上来：把贴尾窗口固化成当前窗口，挂载区间保持连续。
-      const tail = tailTranscriptStart(chatTranscriptLengthRef.current)
-      transcriptWindowStartRef.current = tail
-      setTranscriptWindowStart(tail)
-      setChatAutoScrollPinnedState(false)
+    if (chatAutoScrollPinned.current !== nextPinned) {
+      if (chatAutoScrollPinned.current && !nextPinned) {
+        // 刚从底部翻上来：把贴尾窗口固化成当前窗口，挂载区间保持连续。
+        const tail = tailTranscriptStart(chatTranscriptLengthRef.current)
+        transcriptWindowStartRef.current = tail
+        setTranscriptWindowStart(tail)
+      }
+      setChatAutoScrollPinnedState(nextPinned)
     }
     chatAutoScrollPinned.current = nextPinned
     lastChatScrollTop.current = element.scrollTop
