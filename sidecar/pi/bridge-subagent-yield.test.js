@@ -4,15 +4,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  assignResearchSubagentTaskID,
   createSubagentYieldExtension,
   formatSubagentToolInput,
   formatSubagentYieldLines,
   isAsyncSubagentReceipt,
   normalizeSubagentYield,
+  projectSubagentTaskForRenderer,
+  projectResearchSubagentUpdates,
   projectSubagentRosterEnd,
   projectSubagentRosterStart,
   projectSubagentToolResult,
+  redactResearchText,
   readSubagentYieldField,
+  researchSubagentLaunchBlockReason,
   validateSubagentYield,
 } from "./bridge-subagent-yield.js";
 
@@ -205,6 +210,252 @@ test("roster start appears and end becomes succeeded or failed", () => {
   assert.equal(failed[0].exitCode, 2);
 });
 
+test("failed Research workers retain a bounded redacted diagnostic summary", () => {
+  const started = projectSubagentRosterStart({
+    agent: "scout",
+    task: "collect one official source",
+  }, { toolCallId: "call-failed" });
+  const failed = projectSubagentRosterEnd(started, {
+    details: {
+      results: [{
+        agent: "scout",
+        exitCode: 1,
+        files: [],
+        findings: [],
+        error: "Worker runtime rejected API_KEY=synthetic-worker-secret",
+      }],
+    },
+  }, {
+    toolCallId: "call-failed",
+    isError: true,
+    secrets: ["synthetic-worker-secret"],
+  });
+
+  assert.equal(failed[0].status, "failed");
+  assert.match(failed[0].summary, /Worker runtime rejected/);
+  assert.match(failed[0].summary, /\[REDACTED\]/);
+  assert.doesNotMatch(failed[0].summary, /synthetic-worker-secret/);
+});
+
+test("failed Research launches retain a redacted preflight block reason", () => {
+  const reason = "Research worker launch blocked: submitted length 24; pending prompt lengths: 18. API_KEY=synthetic-worker-secret";
+  const started = projectSubagentRosterStart({
+    agent: "scout",
+    task: "Collect source evidence",
+  }, { toolCallId: "call-blocked" });
+  const wrapped = projectSubagentToolResult({
+    toolName: "subagent",
+    content: [{ type: "text", text: reason }],
+    details: { results: [] },
+    input: { agent: "scout", task: "Collect source evidence" },
+  }, {
+    workspace: "/work",
+    secrets: ["synthetic-worker-secret"],
+  });
+  const failed = projectSubagentRosterEnd(started, wrapped, {
+    toolCallId: "call-blocked",
+    isError: true,
+    secrets: ["synthetic-worker-secret"],
+  });
+
+  assert.match(failed[0].summary, /Research worker launch blocked/);
+  assert.match(failed[0].summary, /pending prompt lengths: 18/);
+  assert.match(failed[0].summary, /API_KEY=\[REDACTED\]/);
+  assert.doesNotMatch(failed[0].summary, /synthetic-worker-secret/);
+});
+
+test("research worker projection tracks only new lanes and redacts credentials", () => {
+  const baseline = new Set(["old-call"]);
+  const tracked = new Set();
+  const first = projectResearchSubagentUpdates([
+    { id: "old-call", prompt: "ignore", status: "running" },
+    {
+      id: "call-1",
+      prompt: "Compare standards without printing Bearer synthetic-provider-key",
+      runId: "async-1",
+      status: "start",
+      summary: "API_KEY=synthetic-result-key synthetic-anthropic-key",
+    },
+  ], baseline, tracked, {
+    TOKENFLUX_API_KEY: "synthetic-provider-key",
+    ANTHROPIC_API_KEY: "synthetic-anthropic-key",
+  });
+
+  assert.deepEqual([...tracked], ["call-1"]);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].workerId, "async-1");
+  assert.equal(first[0].status, "running");
+  assert.doesNotMatch(first[0].prompt, /synthetic-provider-key/);
+  assert.doesNotMatch(first[0].result, /synthetic-result-key/);
+  assert.doesNotMatch(first[0].result, /synthetic-anthropic-key/);
+
+  const terminal = projectResearchSubagentUpdates([
+    {
+      id: "call-1",
+      prompt: "Compare standards",
+      runId: "async-1",
+      status: "succeeded",
+      transcript: "The official sources agree.",
+    },
+  ], baseline, tracked, {});
+  assert.equal(terminal[0].status, "succeeded");
+  assert.equal(terminal[0].result, "The official sources agree.");
+});
+
+test("subagent tool results redact opaque and short provider keys", () => {
+  const opaque = "opaque-custom-provider-value";
+  const asyncResult = projectSubagentToolResult({
+    content: [{
+      type: "text",
+      text: `Async: scout [run-1]\n${opaque}\nThe async run is detached and running in the background.`,
+    }],
+    details: {
+      mode: "single",
+      runId: "run-1",
+      customProviderKey: opaque,
+    },
+  }, { environment: { MILKSU_CUSTOM_PROVIDER_KEY: opaque } });
+  assert.doesNotMatch(JSON.stringify(asyncResult), /opaque-custom-provider-value/);
+
+  const synchronous = projectSubagentToolResult({
+    content: [{ type: "text", text: `The source returned ${opaque}` }],
+    details: {
+      results: [{ agent: "scout", exitCode: 0, files: [], findings: [], cwd: "." }],
+    },
+  }, { secrets: [opaque] });
+  assert.doesNotMatch(JSON.stringify(synchronous), /opaque-custom-provider-value/);
+
+  const shortResult = projectSubagentToolResult({
+    content: [{ type: "text", text: "The value xy is short; xylophone remains ordinary text." }],
+    details: { results: [{ agent: "scout", exitCode: 0, files: [], findings: [], cwd: "." }] },
+  }, { environment: { OPENAI_API_KEY: "xy" } });
+  assert.doesNotMatch(JSON.stringify(shortResult), /value xy/);
+  assert.match(JSON.stringify(shortResult), /xylophone/);
+  assert.doesNotMatch(
+    redactResearchText(`A query with ${opaque}`, { MILKSU_CUSTOM_PROVIDER_KEY: opaque }),
+    /opaque-custom-provider-value/,
+  );
+});
+
+test("research redaction removes signed URL credentials and secret object fields", () => {
+  const text = redactResearchText(
+    "https://storage.example.test/file?X-Amz-Credential=aws-id%2Fscope&X-Amz-Signature=aws-signature&X-Amz-Security-Token=aws-session&X-Goog-Signature=google-signature&AWSAccessKeyId=google-id&sig=azure-sig&keep=visible",
+    {},
+  );
+  assert.doesNotMatch(text, /aws-id|aws-signature|aws-session|google-signature|google-id|azure-sig/);
+  assert.match(text, /keep=visible/);
+
+  const structured = redactResearchText({
+    X_Amz_Signature: "structured-signature",
+    apiKey: "structured-key",
+    label: "ordinary value",
+  }, {});
+  assert.equal(structured.X_Amz_Signature, "[REDACTED]");
+  assert.equal(structured.apiKey, "[REDACTED]");
+  assert.equal(structured.label, "ordinary value");
+});
+
+test("renderer task snapshots redact credentials from async worker text", () => {
+  const task = projectSubagentTaskForRenderer({
+    id: "task-1",
+    role: "scout",
+    status: "running",
+    summary: "API_KEY=synthetic-summary-key",
+    transcript: "Found https://example.test/?token=synthetic-query-key",
+    yield: { findings: [{ note: "Bearer synthetic-bearer-key" }] },
+  }, {
+    TOKENFLUX_API_KEY: "synthetic-summary-key",
+  }, ["synthetic-query-key", "synthetic-bearer-key"]);
+
+  assert.equal(task.id, "task-1");
+  assert.doesNotMatch(JSON.stringify(task), /synthetic-(?:summary|query|bearer)-key/);
+  assert.match(task.summary, /\[REDACTED\]/);
+  assert.match(task.transcript, /\[REDACTED\]/);
+});
+
+test("research worker association requires an explicitly registered prompt", () => {
+  const context = {
+    baseline: new Set(["old-call"]),
+    pending: new Map([["Collect source A", ["research_task_a", "research_task_b"]]]),
+    workerTaskIDs: new Map(),
+  };
+  assert.equal(assignResearchSubagentTaskID({
+    id: "old-call",
+    prompt: "Collect source A",
+  }, context), "");
+  assert.equal(assignResearchSubagentTaskID({
+    id: "unrelated-call",
+    prompt: "Inspect another module",
+  }, context), "");
+  assert.equal(assignResearchSubagentTaskID({
+    id: "call-a",
+    prompt: "Collect source A",
+  }, context), "research_task_a");
+  assert.equal(assignResearchSubagentTaskID({
+    id: "call-a",
+    prompt: "updated transcript omitted the prompt",
+  }, context), "research_task_a");
+  assert.equal(assignResearchSubagentTaskID({
+    id: "call-b",
+    prompt: "Collect source A",
+  }, context), "research_task_b");
+});
+
+test("research run blocks unregistered and non-scout worker launches", () => {
+  const contexts = [{
+    cancelled: false,
+    pending: new Map([["Collect source A", ["research_task_a"]]]),
+  }];
+  assert.equal(researchSubagentLaunchBlockReason({
+    agent: "scout",
+    task: "Collect source A",
+  }, contexts), "");
+  assert.match(researchSubagentLaunchBlockReason({
+    agent: "scout",
+    task: "Inspect an unrelated module",
+  }, contexts), /submitted length \d+; pending prompt lengths: 16/);
+  assert.match(researchSubagentLaunchBlockReason({
+    agent: "scout",
+    task: "",
+  }, contexts), /missing its registered task prompt/);
+  assert.match(researchSubagentLaunchBlockReason({
+    agent: "scout",
+    task: "Collect source A",
+  }, [{ cancelled: false, pending: new Map() }]), /no pending registered prompt is visible/);
+  const startedContext = {
+    cancelled: false,
+    pending: new Map([["Collect source A", ["research_task_a"]]]),
+    workerTaskIDs: new Map(),
+    workerPrompts: new Map(),
+  };
+  assert.equal(assignResearchSubagentTaskID({
+    id: "call-bound",
+    prompt: "Collect source A",
+  }, startedContext), "research_task_a");
+  assert.equal(researchSubagentLaunchBlockReason({
+    agent: "scout",
+    task: "Collect source A",
+  }, [startedContext], "call-bound"), "");
+  assert.match(researchSubagentLaunchBlockReason({
+    agent: "scout",
+    task: "different prompt",
+  }, [startedContext], "call-bound"), /no pending registered prompt is visible/);
+  assert.match(researchSubagentLaunchBlockReason({
+    agent: "scout",
+    task: "Collect source A",
+  }, [startedContext], "call-unbound"), /no pending registered prompt is visible/);
+  assert.match(researchSubagentLaunchBlockReason({
+    agent: "worker",
+    task: "Collect source A",
+  }, contexts), /scout/);
+  assert.equal(researchSubagentLaunchBlockReason({ action: "status" }, contexts), "");
+  assert.match(researchSubagentLaunchBlockReason({ action: "resume", id: "run-1" }, contexts), /cancel_research_run/);
+  assert.equal(researchSubagentLaunchBlockReason({
+    agent: "worker",
+    task: "regular coding delegation",
+  }, [{ cancelled: true, pending: new Map() }]), "");
+});
+
 test("management results keep the package text and do not open a failed roster row", () => {
   const result = {
     content: [{ type: "text", text: "Executable agents:\n- scout" }],
@@ -266,8 +517,10 @@ test("normalize falls back to session workspace then dot when Pi omits location"
 
 test("tool_result hook only wraps subagent results", async () => {
   const listeners = new Map();
+  const asyncSecret = "opaque-turn-provider-secret";
   const extension = createSubagentYieldExtension({
     workspace: "/work",
+    secrets: [asyncSecret],
   });
   extension({
     on(type, handler) {
@@ -308,6 +561,23 @@ test("tool_result hook only wraps subagent results", async () => {
   assert.deepEqual(unstructured.details.yield.files, []);
   assert.equal(String(unstructured.content[0].text).includes("requires cwd"), false);
   assert.equal(String(unstructured.content[0].text).includes("worktreeId"), false);
+
+  const asyncWrapped = await handler({
+    toolName: "subagent",
+    content: [{
+      type: "text",
+      text: `Async: scout [async-1] ${asyncSecret}\nThe async run is detached and running in the background.`,
+    }],
+    details: {
+      mode: "single",
+      runId: "async-1",
+      asyncDir: ".milksu/async-1",
+      providerKey: asyncSecret,
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(asyncWrapped), /opaque-turn-provider-secret/);
+  assert.equal(asyncWrapped.details.asyncDir, ".milksu/async-1");
+  assert.equal(asyncWrapped.details.yield, undefined);
 
   const emptyContextListeners = new Map();
   createSubagentYieldExtension({})({

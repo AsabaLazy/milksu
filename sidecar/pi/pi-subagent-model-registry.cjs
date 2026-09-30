@@ -139,6 +139,11 @@ function forgetSessionProviders(conversationId) {
   sessions.delete(String(conversationId ?? "").trim());
 }
 
+function sessionProviderSecrets(conversationId) {
+  const session = sessions.get(String(conversationId ?? "").trim());
+  return Object.values(session?.secrets ?? {}).filter(value => String(value ?? "").length > 0);
+}
+
 function resetChildModelRegistry() {
   sessions.clear();
 }
@@ -216,6 +221,7 @@ module.exports = {
   forgetSessionProviders,
   publicProvider,
   rememberSessionProviders,
+  sessionProviderSecrets,
   resetChildModelRegistry,
   subagentKeyEnv,
 };

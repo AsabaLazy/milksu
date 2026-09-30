@@ -60,6 +60,7 @@ import {
 import { preparePromptAttachments } from "./bridge-attachments.js";
 import {
   backgroundTaskMetasForSession,
+  commandActivityLabel,
   projectBackgroundTaskMetas,
 } from "./bridge-background-view.js";
 import {
@@ -91,6 +92,7 @@ import {
   codingBrowserGuidance,
   codingBrowserToolBlockReason,
   formatCodingBrowserApprovalInput,
+  researchBrowserToolBlockReason,
 } from "./bridge-browser-policy.js";
 import { isComputerUseMcpToolName } from "./bridge-computer-use-routing.js";
 import { disposeAgentSession } from "./bridge-session-lifecycle.js";
@@ -129,6 +131,7 @@ import {
 } from "./bridge-collaboration.js";
 import { readAsyncSubagentSnapshot } from "./pi-subagents-status.js";
 import { terminateConversationSubagents } from "./pi-subagents-stop.js";
+import { cancelResearchWorkers } from "./bridge-research-cancel.js";
 import {
   authorizeImageGenToolCall,
   codingImageGenToolName,
@@ -151,10 +154,15 @@ import { createToolResultBoundExtension } from "./bridge-tool-result-bound.js";
 import { createHangGuardExtension } from "./bridge-hang-guard.js";
 import {
   createSubagentYieldExtension,
+  assignResearchSubagentTaskID,
   formatSubagentToolInput,
+  projectResearchSubagentUpdates,
+  projectSubagentTaskForRenderer,
   projectSubagentRosterEnd,
   projectSubagentRosterStart,
   projectSubagentToolResult,
+  redactResearchText,
+  researchSubagentLaunchBlockReason,
 } from "./bridge-subagent-yield.js";
 import {
   followUpSession,
@@ -178,6 +186,7 @@ import {
   forgetSessionProviders,
   publicProvider,
   rememberSessionProviders,
+  sessionProviderSecrets,
 } from "./pi-subagent-model-registry.cjs";
 import {
   createModelSourceRouteProvider,
@@ -360,20 +369,24 @@ function emitBackgroundTasks(conversationId) {
     console.error("MilkSU could not read Pi background task state", error);
     emit(conversationId, "background_tasks", {
       tasks: [],
-      error: describeError(error),
+      error: redactResearchText(
+        describeError(error),
+        process.env,
+        sessionProviderSecrets(conversationId),
+      ),
     });
   }
 }
 
 function projectedBackgroundTasks(conversationId) {
-  return projectBackgroundTaskMetas(
+  return redactResearchText(projectBackgroundTaskMetas(
     backgroundTaskMetasForSession(
       listPiBackgroundTaskMetas(),
       conversationId,
     ),
     Date.now(),
     readPiBackgroundTaskLog,
-  );
+  ), process.env, sessionProviderSecrets(conversationId));
 }
 
 function createReviewedBackgroundTasksExtension(conversationId) {
@@ -389,24 +402,188 @@ function createReviewedBackgroundTasksExtension(conversationId) {
 }
 
 const subagentPollers = new Map();
+const researchRunContexts = new Map();
+
+function setResearchRunContext(conversationId, context, preserveExistingWorkers = false) {
+  let contexts = researchRunContexts.get(conversationId);
+  if (!contexts) {
+    contexts = new Map();
+    researchRunContexts.set(conversationId, contexts);
+  }
+  for (const [existingRunID, existingContext] of contexts) {
+    if (existingRunID === context.runId) continue;
+    existingContext.cancelled = true;
+    existingContext.pending.clear();
+  }
+  const existing = contexts.get(context.runId);
+  if (existing && preserveExistingWorkers) {
+    context.baseline = new Set([
+      ...context.baseline,
+      ...existing.baseline,
+      ...existing.workerTaskIDs.keys(),
+    ]);
+    context.workerTaskIDs = existing.workerTaskIDs;
+    context.workerPrompts = existing.workerPrompts ?? new Map();
+  }
+  contexts.set(context.runId, context);
+}
+
+function researchRunContext(conversationId, runId) {
+  return researchRunContexts.get(conversationId)?.get(runId);
+}
+
+function activeResearchRunContext(conversationId) {
+  const contexts = researchRunContexts.get(conversationId);
+  if (!contexts) return undefined;
+  const candidates = [...contexts.values()];
+  return candidates.find(context => !context.cancelled)
+    ?? candidates.find(context => context.cancelled && context.workerTaskIDs.size > 0);
+}
+
+function hasActiveResearchRun(conversationId) {
+  return Boolean(activeResearchRunContext(conversationId));
+}
+
+function deleteResearchRunContext(conversationId, runId, expected) {
+  const contexts = researchRunContexts.get(conversationId);
+  if (!contexts || (expected && contexts.get(runId) !== expected)) return;
+  contexts.delete(runId);
+  if (!contexts.size) researchRunContexts.delete(conversationId);
+}
+
+function observeResearchWorkspaceAction({ conversationId, action, result }) {
+  let value;
+  try {
+    value = JSON.parse(result);
+  } catch {
+    return;
+  }
+  if (action === "open_research_browser_tab") {
+    const runId = String(value?.runId ?? "").trim();
+    const context = researchRunContext(conversationId, runId);
+    if (context && !context.cancelled && value?.activeTabId) {
+      context.browserTabId = String(value.activeTabId);
+    }
+    return;
+  }
+  if (action === "open_browser_tab" || action === "focus_browser_tab") {
+    const context = activeResearchRunContext(conversationId);
+    if (context && !context.cancelled && value?.activeTabId) {
+      context.browserTabId = String(value.activeTabId);
+    }
+    return;
+  }
+  const runId = String(
+    value?.run?.id ?? value?.runId ?? value?.task?.runId ?? value?.id ?? "",
+  ).trim();
+  if (!runId) return;
+  if (["start_research_run", "resume_research_run", "begin_research_gap_fill"].includes(action)) {
+    const baseline = new Set(
+      (sessionSubagentTasks.get(conversationId) ?? []).map(task => task.id),
+    );
+    setResearchRunContext(conversationId, {
+      runId,
+      baseline,
+      pending: new Map(),
+      workerTaskIDs: new Map(),
+      workerPrompts: new Map(),
+      stopUnconfirmed: false,
+    }, action === "resume_research_run");
+    return;
+  }
+  if (action === "register_research_task") {
+    const context = researchRunContext(conversationId, runId);
+    const task = value?.task;
+    const prompt = String(task?.prompt ?? "").trim();
+    const taskId = String(task?.id ?? "").trim();
+    if (!context || context.runId !== runId || !taskId || !prompt) return;
+    const pending = context.pending.get(prompt) ?? [];
+    if (pending.includes(taskId) || [...context.workerTaskIDs.values()].includes(taskId)) return;
+    pending.push(taskId);
+    context.pending.set(prompt, pending);
+    emitResearchTaskUpdates(conversationId, sessionSubagentTasks.get(conversationId) ?? []);
+    return;
+  }
+  if (action === "cancel_research_run") {
+    const current = researchRunContext(conversationId, runId);
+    if (!current || current.runId !== runId) return;
+    current.cancelled = true;
+    current.browserTabId = "";
+    const tasks = sessionSubagentTasks.get(conversationId) ?? [];
+    const stillRunning = tasks.some(task => (
+      current.workerTaskIDs.has(task.id)
+      && (task.status === "running" || task.status === "start")
+    ));
+    const hasPending = [...current.pending.values()].some(ids => ids.length > 0);
+    if (!stillRunning && !hasPending) deleteResearchRunContext(conversationId, runId, current);
+    return;
+  }
+  if (action === "complete_research_run") {
+    deleteResearchRunContext(conversationId, runId);
+  }
+}
+
+function researchSubagentBlockReason(conversationId, input, toolCallId = "") {
+  const contexts = researchRunContexts.get(conversationId);
+  return researchSubagentLaunchBlockReason(
+    input,
+    contexts ? [...contexts.values()] : [],
+    toolCallId,
+  );
+}
+
+function emitResearchTaskUpdates(conversationId, tasks) {
+  const contexts = researchRunContexts.get(conversationId);
+  if (!contexts) return;
+  for (const context of contexts.values()) {
+    const matched = [];
+    for (const task of tasks) {
+      if (!assignResearchSubagentTaskID(task, context)) continue;
+      matched.push(task);
+    }
+    const updates = projectResearchSubagentUpdates(
+      matched,
+      new Set(),
+      new Set(),
+      process.env,
+      sessionProviderSecrets(conversationId),
+    );
+    for (const update of updates) {
+      update.id = context.workerTaskIDs.get(update.id) ?? update.id;
+    }
+    if (updates.length) {
+      emit(conversationId, "research_tasks", {
+        researchRunId: context.runId,
+        researchTasks: updates,
+      });
+    }
+    if (context.cancelled) {
+      const stillRunning = tasks.some(task => (
+        context.workerTaskIDs.has(task.id)
+        && (task.status === "running" || task.status === "start")
+      ));
+      if (!stillRunning && context.pending.size === 0) {
+        if (context.stopUnconfirmed) {
+          context.stopUnconfirmed = false;
+          emit(conversationId, "research_cancel_confirmed", {
+            researchRunId: context.runId,
+          });
+        }
+        deleteResearchRunContext(conversationId, context.runId, context);
+      }
+    }
+  }
+}
 
 function emitSubagentTasks(conversationId, tasks) {
   const next = Array.isArray(tasks) ? tasks : [];
   if (next.length) sessionSubagentTasks.set(conversationId, next);
   else sessionSubagentTasks.delete(conversationId);
+  const secrets = sessionProviderSecrets(conversationId);
   emit(conversationId, "subagent_tasks", {
-    subagentTasks: next.map(task => ({
-      id: task.id,
-      role: task.role,
-      status: task.status,
-      toolCallId: task.toolCallId,
-      durationMs: task.durationMs,
-      exitCode: task.exitCode,
-      yield: task.yield,
-      summary: task.summary,
-      transcript: task.transcript,
-    })),
+    subagentTasks: next.map(task => projectSubagentTaskForRenderer(task, process.env, secrets)),
   });
+  emitResearchTaskUpdates(conversationId, next);
 }
 
 function stopSubagentPoll(conversationId) {
@@ -806,6 +983,19 @@ function createCodingPermissionExtension(
       }
       if (event.toolName === "mcp") {
         const serverName = selectedMcpServer(policy, event.input);
+        const researchActive = hasActiveResearchRun(conversationId);
+        if (researchActive && serverName !== codingBrowserMcpServerName) {
+          return {
+            block: true,
+            reason: "Deep Research uses Pi web tools and this conversation's managed Browser, not other MCP servers.",
+          };
+        }
+        const researchBrowserBlockReason = researchBrowserToolBlockReason(
+          event.input,
+          serverName,
+          researchActive,
+          activeResearchRunContext(conversationId)?.browserTabId,
+        );
         const browserBlockReason = codingBrowserToolBlockReason(
           event.input,
           serverName,
@@ -817,10 +1007,10 @@ function createCodingPermissionExtension(
             ? policy.browserUse?.sessionId
             : policy.codingBrowser?.sessionId,
         );
-        if (browserBlockReason || evidenceBlockReason) {
+        if (researchBrowserBlockReason || browserBlockReason || evidenceBlockReason) {
           return {
             block: true,
-            reason: browserBlockReason || evidenceBlockReason,
+            reason: researchBrowserBlockReason || browserBlockReason || evidenceBlockReason,
           };
         }
       }
@@ -845,6 +1035,17 @@ function createCodingPermissionExtension(
             reason: error instanceof Error ? error.message : String(error),
           };
         }
+        const researchBlockReason = researchSubagentBlockReason(
+          conversationId,
+          event.input,
+          event.toolCallId,
+        );
+        if (researchBlockReason) {
+          return {
+            block: true,
+            reason: researchBlockReason,
+          };
+        }
         if (subagentCallRequiresApproval(
           subagentRequest.externalCli,
           policy.approvalPolicy,
@@ -852,12 +1053,16 @@ function createCodingPermissionExtension(
           const approved = await approvalBroker.request({
             conversationId,
             toolName: codingCollaborationToolName,
-            content: formatSubagentApproval(
+            content: redactResearchText(formatSubagentApproval(
               event.input,
               policy.codingCollaboration,
               policy.workspace,
-            ),
-            input: truncate(JSON.stringify(event.input ?? {}, null, 2), 16000),
+            ), process.env, sessionProviderSecrets(conversationId)),
+            input: truncate(JSON.stringify(redactResearchText(
+              event.input ?? {},
+              process.env,
+              sessionProviderSecrets(conversationId),
+            ), null, 2), 16000),
             grantKey: codingCollaborationToolName,
           });
           if (!approved) {
@@ -892,11 +1097,24 @@ function createCodingPermissionExtension(
           || backgroundEffect
         )
       ) {
-        const approved = await approvalBroker.request({
-          conversationId,
-          toolName: event.toolName,
-          content: formatToolInput(event.toolName, event.input),
-          input: truncate(JSON.stringify(event.input ?? {}, null, 2), 16000),
+          const approved = await approvalBroker.request({
+            conversationId,
+            toolName: event.toolName,
+            content: redactResearchText(formatToolInput(
+              event.toolName,
+              event.input,
+              sessionProviderSecrets(conversationId),
+            ), process.env, sessionProviderSecrets(conversationId)),
+            input: event.toolName === codingWorkspaceToolName
+              ? formatCodingWorkspaceInput(event.input, {
+                environment: process.env,
+                secrets: sessionProviderSecrets(conversationId),
+              })
+              : truncate(JSON.stringify(redactResearchText(
+                event.input ?? {},
+                process.env,
+                sessionProviderSecrets(conversationId),
+              ), null, 2), 16000),
           grantKey: event.toolName,
         });
         if (!approved) {
@@ -918,8 +1136,16 @@ function createCodingPermissionExtension(
         const approved = await approvalBroker.request({
           conversationId,
           toolName: `mcp:${serverName}`,
-          content: formatMcpApprovalInput(event.input, serverName),
-          input: truncate(JSON.stringify(event.input ?? {}, null, 2), 16000),
+          content: redactResearchText(
+            formatMcpApprovalInput(event.input, serverName),
+            process.env,
+            sessionProviderSecrets(conversationId),
+          ),
+          input: truncate(JSON.stringify(redactResearchText(
+            event.input ?? {},
+            process.env,
+            sessionProviderSecrets(conversationId),
+          ), null, 2), 16000),
           grantKey: mcpConversationGrantKey(event.input, serverName),
         });
         if (!approved) {
@@ -1018,7 +1244,7 @@ function formatMcpApprovalInput(input, serverName) {
   ].filter(Boolean).join(" · ");
 }
 
-function formatToolInput(toolName, args) {
+function formatToolInput(toolName, args, secrets = []) {
   if (!args || typeof args !== "object") return "";
   if (toolName === "ctf_request_endpoint") {
     const protocol = String(args.protocol ?? "").trim().toLowerCase();
@@ -1052,7 +1278,7 @@ function formatToolInput(toolName, args) {
     return [protocol, endpoint].filter(Boolean).join(" · ");
   }
   if (toolName === "bash" && typeof args.command === "string") {
-    return `$ ${args.command}`;
+    return `$ ${commandActivityLabel(args.command)}`;
   }
   if (toolName === codingImageGenToolName) {
     const mode = args.mode === "edit" ? "编辑图片" : "生成图片";
@@ -1066,12 +1292,8 @@ function formatToolInput(toolName, args) {
   if (toolName === "bg_task") {
     const action = String(args.action ?? "").trim();
     const name = String(args.name ?? "").trim();
-    const command = typeof args.command === "string"
-      ? args.command
-      : Array.isArray(args.argv)
-        ? args.argv.join(" ")
-        : "";
-    return [action, name, command].filter(Boolean).join(" · ");
+    const hasCommand = typeof args.command === "string" || Array.isArray(args.argv);
+    return [action, name, hasCommand ? "[command hidden]" : ""].filter(Boolean).join(" · ");
   }
   if (toolName === "bg_status") {
     return [args.action, args.id].map(value => String(value ?? "").trim())
@@ -1079,7 +1301,7 @@ function formatToolInput(toolName, args) {
       .join(" · ");
   }
   if (toolName === codingWorkspaceToolName) {
-    return formatCodingWorkspaceInput(args);
+    return formatCodingWorkspaceInput(args, { environment: process.env, secrets });
   }
   if (toolName === codingAskToolName) {
     const question = String(args.question ?? "").trim();
@@ -1088,6 +1310,10 @@ function formatToolInput(toolName, args) {
   }
   if (toolName === codingCollaborationToolName) {
     return formatSubagentToolInput(args);
+  }
+  if (toolName === "mcp") {
+    const tool = String(args.tool ?? "").trim();
+    return tool ? `MCP tool · ${tool}` : "MCP tool call";
   }
   if (toolName === "milksu_progress") {
     // Same checklist shape as the tool result so the UI can project a live plan
@@ -1555,7 +1781,11 @@ function subscribeSession(
       emit(conversationId, "tool_call_start", {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        content: formatToolInput(event.toolName, event.args),
+        content: redactResearchText(formatToolInput(
+          event.toolName,
+          event.args,
+          sessionProviderSecrets(conversationId),
+        ), process.env, sessionProviderSecrets(conversationId)),
         module: usageModule,
       });
       return;
@@ -1575,6 +1805,7 @@ function subscribeSession(
     if (event.type === "tool_execution_end") {
       const startedAt = toolStartedAt.get(event.toolCallId);
       toolStartedAt.delete(event.toolCallId);
+      let toolResultForView = event.result;
       if (event.toolName === "bg_task" || event.toolName === "bg_status") {
         emitBackgroundTasks(conversationId);
       }
@@ -1593,13 +1824,16 @@ function subscribeSession(
           workspace: policy?.workspace,
           collaboration: policy?.codingCollaboration,
           worktrees: policy?.codingCollaboration?.worktrees,
+          secrets: sessionProviderSecrets(conversationId),
         });
+        toolResultForView = wrapped;
         const projected = projectSubagentRosterEnd(owned, wrapped, {
           toolCallId: event.toolCallId,
           durationMs: startedAt === undefined
             ? undefined
             : Math.max(0, Date.now() - startedAt),
           isError: event.isError,
+          secrets: sessionProviderSecrets(conversationId),
         });
         emitSubagentTasks(conversationId, [
           ...others,
@@ -1623,7 +1857,11 @@ function subscribeSession(
       emit(conversationId, "tool_call_end", {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
-        content: truncate(extractToolResultContent(event.result), maxToolEventOutputBytes),
+        content: truncate(redactResearchText(
+          extractToolResultContent(toolResultForView),
+          process.env,
+          sessionProviderSecrets(conversationId),
+        ), maxToolEventOutputBytes),
         durationMs: startedAt === undefined
           ? undefined
           : Math.max(0, Date.now() - startedAt),
@@ -1736,6 +1974,9 @@ function createMilkSUResourceLoader(
           contextWindow: sessions.get(id)?.model?.contextWindow
             ?? sessionContextUsage.get(id)?.contextWindow,
         }),
+        observeResearchWorkspaceAction,
+        () => sessionProviderSecrets(conversationId),
+        () => hasActiveResearchRun(conversationId),
       ),
       createEnvExtension(
         conversationId,
@@ -1756,6 +1997,7 @@ function createMilkSUResourceLoader(
           workspace: policy?.workspace || cwd,
           collaboration: policy?.codingCollaboration,
           worktrees: policy?.codingCollaboration?.worktrees,
+          secrets: sessionProviderSecrets(conversationId),
         };
       }),
   );
@@ -2411,6 +2653,7 @@ async function destroySession(command) {
   sessionConfiguredProviders.delete(conversationId);
   forgetSessionProviders(conversationId);
   sessionSubagentTasks.delete(conversationId);
+  researchRunContexts.delete(conversationId);
   backgroundTaskControllers.delete(conversationId);
   promptQueues.delete(conversationId);
   abortedSessions.delete(conversationId);
@@ -2768,6 +3011,57 @@ async function controlBackgroundTask(command) {
   }
 }
 
+async function cancelResearchRunCommand(command) {
+  const conversationId = String(command.conversationId ?? "").trim();
+  const runId = String(command.runId ?? "").trim();
+  if (!conversationId || !runId) throw new Error("conversationId and runId are required");
+  const context = researchRunContext(conversationId, runId);
+  if (!context || context.runId !== runId) {
+    if (command.workerStopMayBeRunning === true) {
+      emit(conversationId, "research_cancel_unconfirmed", {
+        researchRunId: runId,
+        content: `Could not confirm worker stop for Research run ${runId}: Sidecar run context is unavailable.`,
+      });
+      return { status: "stop-unconfirmed", taskIDs: [] };
+    }
+    emit(conversationId, "research_cancel_confirmed", { researchRunId: runId });
+    return { status: "stopped", taskIDs: [] };
+  }
+
+  context.cancelled = true;
+  context.browserTabId = "";
+  const workspace = sessionPolicies.get(conversationId)?.workspace;
+  const { tasks: next, unconfirmedTaskIDs } = await cancelResearchWorkers({
+    getTasks: () => sessionSubagentTasks.get(conversationId) ?? [],
+    workerTaskIDs: context.workerTaskIDs,
+    workspace,
+  });
+
+  context.pending.clear();
+  emitSubagentTasks(conversationId, next);
+  const stillRunning = next.some(task => (
+    context.workerTaskIDs.has(task.id)
+    && (task.status === "running" || task.status === "start")
+  ));
+  if (!stillRunning) deleteResearchRunContext(conversationId, runId, context);
+  if (subagentStillLive(next) || stillRunning) ensureSubagentPoll(conversationId);
+  else stopSubagentPoll(conversationId);
+  if (unconfirmedTaskIDs.length) {
+    context.stopUnconfirmed = true;
+    const researchTaskIDs = unconfirmedTaskIDs.map(
+      taskID => context.workerTaskIDs.get(taskID) ?? taskID,
+    );
+    emit(conversationId, "research_cancel_unconfirmed", {
+      researchRunId: runId,
+      content: `Could not confirm stop for Research worker(s) in run ${runId}: ${researchTaskIDs.join(", ")}`,
+    });
+    return { status: "stop-unconfirmed", taskIDs: researchTaskIDs };
+  }
+  context.stopUnconfirmed = false;
+  emit(conversationId, "research_cancel_confirmed", { researchRunId: runId });
+  return { status: "stopped" };
+}
+
 async function handleCommand(command) {
   switch (command.action) {
     case "create_session":
@@ -2803,6 +3097,9 @@ async function handleCommand(command) {
     case "background_task_control":
       await controlBackgroundTask(command);
       break;
+    case "cancel_research_run":
+      await cancelResearchRunCommand(command);
+      break;
     case "compact_session":
       await compactSessionCommand(command);
       break;
@@ -2830,6 +3127,10 @@ input.on("line", (line) => {
     command = JSON.parse(line);
   } catch (error) {
     emit(null, "error", { error: describeError(error) });
+    return;
+  }
+  if (command.action === "shutdown") {
+    void shutdown();
     return;
   }
   if (command.action === "abort_session") {
@@ -2887,6 +3188,14 @@ input.on("line", (line) => {
       return;
     }
   }
+  if (command.action === "cancel_research_run") {
+    if (sessions.has(command.conversationId)) {
+      void cancelResearchRunCommand(command).catch((error) => {
+        emit(command.conversationId ?? null, "error", { error: describeError(error) });
+      });
+      return;
+    }
+  }
   if (command.action === "compact_session") {
     void compactSessionCommand(command);
     return;
@@ -2922,6 +3231,7 @@ async function disposeAllSessions() {
     [...sessions.values()].map(session => disposeAgentSession(session)),
   );
   for (const conversationId of subagentPollers.keys()) stopSubagentPoll(conversationId);
+  researchRunContexts.clear();
   sessions.clear();
   sessionCreateCommands.clear();
   backgroundTaskControllers.clear();

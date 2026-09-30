@@ -28,6 +28,14 @@ type codingWorkspaceRequest struct {
 	Statement      string   `json:"statement"`
 	Category       string   `json:"category"`
 	Summary        string   `json:"summary"`
+	RunID          string   `json:"runId"`
+	TaskPrompt     string   `json:"taskPrompt"`
+	Extract        string   `json:"extract"`
+	Claim          string   `json:"claim"`
+	SourceID       string   `json:"sourceId"`
+	Verdict        string   `json:"verdict"`
+	Reason         string   `json:"reason"`
+	Report         string   `json:"report"`
 	CVEID          string   `json:"cveId"`
 	Vendor         string   `json:"vendor"`
 	Product        string   `json:"product"`
@@ -55,7 +63,21 @@ func (a *App) handleCodingWorkspaceAction(conversationID, action, input string) 
 	if action == "" {
 		action = request.Action
 	}
-	switch strings.TrimSpace(action) {
+	action = strings.TrimSpace(action)
+	if isResearchWorkspaceAction(action) {
+		return a.handleResearchWorkspaceAction(conversationID, action, request)
+	}
+	if a.research != nil && (action == "list_browser_tabs" || action == "open_browser_tab" || action == "focus_browser_tab" ||
+		action == "close_browser_tab" || action == "close_all_browser_tabs") {
+		researchActive, err := a.researchRunActiveForConversation(conversationID)
+		if err != nil {
+			return "", err
+		}
+		if researchActive {
+			return "", fmt.Errorf("Deep Research only exposes its typed Browser source action")
+		}
+	}
+	switch action {
 	case "prepare_coding_worktree":
 		workspacePath, err := a.resolveConversationWorkspace(conversationID, request.Path)
 		if err != nil {

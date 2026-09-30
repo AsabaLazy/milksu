@@ -6,6 +6,7 @@ import (
 	"github.com/MilkSU-Official/milksu/internal/ctfshow"
 	"github.com/MilkSU-Official/milksu/internal/modelusage"
 	"github.com/MilkSU-Official/milksu/internal/nssctf"
+	"github.com/MilkSU-Official/milksu/internal/research"
 	"github.com/MilkSU-Official/milksu/internal/securityruntime"
 )
 
@@ -39,6 +40,11 @@ func databaseCompatDescriptors() []appdata.DatabaseDescriptor {
 			LogicalName:  "Coding Agent Usage",
 			RelativePath: "usage/model-usage.sqlite3",
 			Supported:    modelusage.SupportedDatabaseVersion,
+		},
+		{
+			LogicalName:  "Research",
+			RelativePath: "research/research.sqlite3",
+			Supported:    research.SupportedDatabaseVersion,
 		},
 	}
 }

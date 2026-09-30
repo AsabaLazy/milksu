@@ -49,6 +49,7 @@
 - 新对话继承项目 `milksu`；Windows Computer Use 整段崩溃尚未真机验收。
 - Computer Use 选窗器仍是可选人工面。宽作业走 `recon-authorized-target` Skill，不造 typed sweep。
 - DSH `bash` 没有 MilkSU 侧超时上界（工具在 harness 进程内，不要在客户端复刻第二套循环）。
+- Pi Deep Research 当前有未发行代码：Pi-only Skill 与 typed workspace actions 持久化 run、worker、sources、citations 和 report；后台任务终态后续跑父会话，最多一次 gap-fill，重启后标成 interrupted 并可在原会话 Resume/Cancel。对话内状态卡从持久化 store 读取，Interrupted 的 Resume 重新进入 Pi，不直接改写 run。普通 `web_fetch` 不可用时父会话可通过 managed Browser 回退，每个 source 使用无历史/无 Cookie 的临时 Research partition；Electron 对 Research requests 拒绝 local/private DNS/IP，并由 loopback proxy 连接解析并验证过的 numeric IP，覆盖 redirects、subresources 和 popup；普通 Browser 仍可访问 localhost。公共 origin 尚无 allowlist。DSH 不接入；Pi 同轮 worker 重叠与 Windows 原生完整任务尚未验收。
 - 不要把 `test:dsh-complete-loop` 当主入口。产品回归走 `npm run test:product-loop`。看板娘核心循环是 `companion-core`：开测时把议题抄本写进这次独立实例，再在手机里提问、按停止、收尾；click / express 检出只读。
 - 看板娘的英文是 Companion。它以前叫「桌宠」。开发、测试和搜旧记录时，桌宠就是看板娘。代码标识、测试 id、目录和插件槽位仍是 companion / `app.pet`。
 - Agent Harness：DSH 没有 Cursor 那种 `run_in_background` Task。ACP `session/prompt` 要等到 `whenIdle`（含子代理）才结算，所以主对话继续发走 host `Agent.followup`。输入栏停止键只在父回合还在生成、压缩或中止时出现。加号 Multitask 在 DSH 上另开 ACP 子会话；在 Pi 上这条消息留在主对话，父模型可以派后台子代理。Pi 非阻塞来自 `pi-subagents` 0.70.1，不是 Pi 0.87.0 自己的能力。工作树 Pi 钉 0.87.0。

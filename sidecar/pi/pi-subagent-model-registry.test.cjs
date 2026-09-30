@@ -14,6 +14,7 @@ const {
   childShellDeniedEnvNames,
   publicProvider,
   rememberSessionProviders,
+  sessionProviderSecrets,
   resetChildModelRegistry,
   subagentKeyEnv,
 } = require("./pi-subagent-model-registry.cjs");
@@ -146,6 +147,7 @@ test("child registry resolves the parent TokenFlux id and keeps the key out of t
       }],
     }, envName);
     rememberSessionProviders("conversation", [turnProvider], { [envName]: turnSecret });
+    assert.deepEqual(sessionProviderSecrets("conversation"), [turnSecret]);
     const turnEnv = applyChildModelEnvironment({
       MILKSU_PI_AGENT_DIR: turnRoot,
       TOKENFLUX_API_KEY: sentinel,

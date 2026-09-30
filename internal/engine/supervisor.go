@@ -145,6 +145,8 @@ type Event struct {
 	Choice             string                   `json:"choice,omitempty"`
 	BackgroundTasks    []BackgroundTask         `json:"backgroundTasks,omitempty"`
 	SubagentTasks      []SubagentTask           `json:"subagentTasks,omitempty"`
+	ResearchRunID      string                   `json:"researchRunId,omitempty"`
+	ResearchTasks      []ResearchTaskUpdate     `json:"researchTasks,omitempty"`
 	Jobs               []DshJob                 `json:"jobs,omitempty"`
 	Commands           []DshCommandDescriptor   `json:"commands,omitempty"`
 	PlanMode           *DshPlanMode             `json:"planMode,omitempty"`
@@ -255,6 +257,14 @@ type SubagentTask struct {
 	DurationMS int64          `json:"durationMs,omitempty"`
 	ExitCode   *int           `json:"exitCode,omitempty"`
 	Yield      *SubagentYield `json:"yield,omitempty"`
+}
+
+type ResearchTaskUpdate struct {
+	ID       string `json:"id"`
+	Prompt   string `json:"prompt,omitempty"`
+	Status   string `json:"status"`
+	WorkerID string `json:"workerId,omitempty"`
+	Result   string `json:"result,omitempty"`
 }
 
 type DshCommandDescriptor struct {
@@ -400,6 +410,8 @@ type bridgeEvent struct {
 	Choice             string                   `json:"choice"`
 	Tasks              []BackgroundTask         `json:"tasks"`
 	SubagentTasks      []SubagentTask           `json:"subagentTasks"`
+	ResearchRunID      string                   `json:"researchRunId"`
+	ResearchTasks      []ResearchTaskUpdate     `json:"researchTasks"`
 	Jobs               []DshJob                 `json:"jobs"`
 	Commands           []DshCommandDescriptor   `json:"commands"`
 	PlanMode           *DshPlanMode             `json:"planMode"`
@@ -442,6 +454,7 @@ type UserMemorySnapshot struct {
 type childProcess struct {
 	command   *exec.Cmd
 	stdin     io.WriteCloser
+	done      chan struct{}
 	workspace string
 	stderr    *sidecarStderrBuffer
 	// retired marks a process the supervisor stopped on purpose (shutdown, idle
@@ -571,6 +584,10 @@ type Supervisor struct {
 	// sidecar serving one of them is never reaped or evicted: a long foreground tool
 	// call produces no events, so elapsed time alone cannot tell "idle" from "working".
 	busySessions        map[string]struct{}
+	researchWorkerTasks map[string]map[string]struct{}
+	// researchRunSessions keeps a live Pi session identifiable if its Sidecar exits
+	// between worker batches; worker tasks themselves pin active detached execution.
+	researchRunSessions map[string]string
 	sessions            map[string]struct{}
 	probeWaiters        map[string]chan Event
 	silentSessions      map[string]struct{}
@@ -735,8 +752,27 @@ func stopChildProcess(process *childProcess) {
 		return
 	}
 	_ = process.stdin.Close()
-	if process.command.Process != nil {
+	if process.command != nil && process.command.Process != nil {
 		_ = process.command.Process.Kill()
+	}
+}
+
+func shutdownChildProcess(process *childProcess) {
+	if process == nil {
+		return
+	}
+	if process.done == nil || process.stdin == nil || process.command == nil {
+		stopChildProcess(process)
+		return
+	}
+	if err := writeCommand(process.stdin, map[string]any{"action": "shutdown"}); err != nil {
+		stopChildProcess(process)
+		return
+	}
+	select {
+	case <-process.done:
+	case <-time.After(5 * time.Second):
+		stopChildProcess(process)
 	}
 }
 
@@ -797,8 +833,8 @@ func (s *Supervisor) parkedCountLocked(kernel string) int {
 	return count
 }
 
-// workspaceHasRunningTurnLocked reports whether any session bound to this workspace has
-// a turn that was sent and has not settled yet.
+// workspaceHasRunningTurnLocked reports whether this workspace has a foreground turn or
+// detached research worker that still needs its Sidecar.
 func (s *Supervisor) workspaceHasRunningTurnLocked(kernel, workspace string) bool {
 	kernel = NormalizeKernel(kernel)
 	for id := range s.busySessions {
@@ -809,7 +845,47 @@ func (s *Supervisor) workspaceHasRunningTurnLocked(kernel, workspace string) boo
 			return true
 		}
 	}
+	for id, tasks := range s.researchWorkerTasks {
+		if len(tasks) > 0 && s.kernelForLocked(id) == kernel && s.sessionWorkspaces[id] == workspace {
+			return true
+		}
+	}
 	return false
+}
+
+func (s *Supervisor) researchSessionsForWorkspaceLocked(kernel, workspace string, includeUnbound bool) []string {
+	kernel = NormalizeKernel(kernel)
+	var sessions []string
+	for id := range s.sessions {
+		runActive := s.researchRunSessions[id] != ""
+		if (len(s.researchWorkerTasks[id]) == 0 && !runActive) || s.kernelForLocked(id) != kernel {
+			continue
+		}
+		bound := s.sessionWorkspaces[id]
+		if bound == workspace || (includeUnbound && bound == "") {
+			sessions = append(sessions, id)
+		}
+	}
+	return sessions
+}
+
+func (s *Supervisor) dropRetiredSessionsLocked(process *childProcess) []string {
+	if process == nil {
+		return nil
+	}
+	var interrupted []string
+	for id := range process.retiredTurns {
+		if _, live := s.sessions[id]; !live || s.kernelForLocked(id) != NormalizeKernel(process.kernel) {
+			continue
+		}
+		_, busy := s.busySessions[id]
+		if !busy && len(s.researchWorkerTasks[id]) == 0 && s.researchRunSessions[id] == "" {
+			continue
+		}
+		interrupted = append(interrupted, id)
+		s.forgetSessionLocked(id)
+	}
+	return interrupted
 }
 
 // oldestParkedCandidateLocked returns the least recently parked sidecar of one kernel.
@@ -913,7 +989,8 @@ func (s *Supervisor) dropWorkspaceSessionsLocked(kernel, workspace string) []str
 		if s.kernelForLocked(id) != kernel || s.sessionWorkspaces[id] != workspace {
 			continue
 		}
-		if _, running := s.busySessions[id]; running {
+		runActive := s.researchRunSessions[id] != ""
+		if _, running := s.busySessions[id]; running || len(s.researchWorkerTasks[id]) > 0 || runActive {
 			interrupted = append(interrupted, id)
 		}
 		s.forgetSessionLocked(id)
@@ -934,7 +1011,8 @@ func (s *Supervisor) dropActiveSessionsLocked(kernel, workspace string) []string
 		if bound := s.sessionWorkspaces[id]; bound != "" && bound != workspace {
 			continue
 		}
-		if _, running := s.busySessions[id]; running {
+		runActive := s.researchRunSessions[id] != ""
+		if _, running := s.busySessions[id]; running || len(s.researchWorkerTasks[id]) > 0 || runActive {
 			interrupted = append(interrupted, id)
 		}
 		s.forgetSessionLocked(id)
@@ -950,6 +1028,8 @@ func (s *Supervisor) forgetSessionLocked(id string) {
 	delete(s.busySessions, id)
 	delete(s.recoveryFailures, id)
 	delete(s.backgroundTasks, id)
+	delete(s.researchWorkerTasks, id)
+	delete(s.researchRunSessions, id)
 }
 
 // sidecarGoneError is the stable marker the renderer maps to a per-conversation notice.
@@ -1069,9 +1149,8 @@ func (s *Supervisor) sessionsWithWaiters() map[string]struct{} {
 }
 
 // processBusyLocked reports whether a sidecar is serving something a rotation must not interrupt:
-// a turn in flight on one of its sessions, a probe or recovery waiter, or - for a sidecar that
-// already left rotation - a turn it was carrying when it left. A turn started after retirement
-// belongs to the replacement, even in the same workspace, so it must not pin the old process.
+// a foreground turn, detached research worker, probe, or recovery waiter. A turn started after
+// retirement belongs to the replacement, even in the same workspace, so it must not pin the old process.
 func (s *Supervisor) processBusyLocked(process *childProcess) bool {
 	if process == nil {
 		return false
@@ -1085,6 +1164,11 @@ func (s *Supervisor) processBusyLocked(process *childProcess) bool {
 			if s.sidecarServesSessionLocked(process, sessionID) {
 				return true
 			}
+		}
+	}
+	for sessionID, tasks := range s.researchWorkerTasks {
+		if len(tasks) > 0 && s.sidecarServesSessionLocked(process, sessionID) {
+			return true
 		}
 	}
 	for sessionID := range s.sessionsWithWaiters() {
@@ -1148,6 +1232,17 @@ func (s *Supervisor) runningTurnsLocked(
 		}
 		turns[id] = struct{}{}
 	}
+	for id := range s.sessions {
+		runActive := s.researchRunSessions[id] != ""
+		if (len(s.researchWorkerTasks[id]) == 0 && !runActive) || s.kernelForLocked(id) != kernel {
+			continue
+		}
+		bound := s.sessionWorkspaces[id]
+		if bound != workspace && !(servesUnbound && bound == "") {
+			continue
+		}
+		turns[id] = struct{}{}
+	}
 	return turns
 }
 
@@ -1165,7 +1260,9 @@ func (s *Supervisor) runningTurnsLocked(
 // belongs to the current sidecar again, which is also what makes a later send reach the
 // replacement instead of the process being reaped.
 func (s *Supervisor) retiringProcessForSessionLocked(sessionID string) *childProcess {
-	if _, running := s.busySessions[sessionID]; !running {
+	runActive := s.researchRunSessions[sessionID] != ""
+	if _, running := s.busySessions[sessionID]; !running &&
+		len(s.researchWorkerTasks[sessionID]) == 0 && !runActive {
 		return nil
 	}
 	for _, process := range s.retiring {
@@ -1185,7 +1282,8 @@ func (s *Supervisor) retiringProcessForSessionLocked(sessionID string) *childPro
 // old process alive.
 func (s *Supervisor) retiredTurnRunningLocked(process *childProcess) bool {
 	for id := range process.retiredTurns {
-		if _, running := s.busySessions[id]; running {
+		runActive := s.researchRunSessions[id] != ""
+		if _, running := s.busySessions[id]; running || len(s.researchWorkerTasks[id]) > 0 || runActive {
 			return true
 		}
 	}
@@ -1201,7 +1299,9 @@ func (s *Supervisor) retiredTurnRunningLocked(process *childProcess) bool {
 func (s *Supervisor) stopRetiredProcessLocked(process *childProcess) []string {
 	var interrupted []string
 	for id := range process.retiredTurns {
-		if _, running := s.busySessions[id]; !running {
+		runActive := s.researchRunSessions[id] != ""
+		if _, running := s.busySessions[id]; !running &&
+			len(s.researchWorkerTasks[id]) == 0 && !runActive {
 			continue
 		}
 		interrupted = append(interrupted, id)
@@ -1317,19 +1417,21 @@ func (s *Supervisor) StopStaleSidecars() int {
 
 func NewSupervisor(emit func(Event)) *Supervisor {
 	return &Supervisor{
-		sessionKernels:    make(map[string]string),
-		sessionWorkspaces: make(map[string]string),
-		sessions:          make(map[string]struct{}),
-		busySessions:      make(map[string]struct{}),
-		parked:            make(map[string]*childProcess),
-		parkedAt:          make(map[string]time.Time),
-		probeWaiters:      make(map[string]chan Event),
-		silentSessions:    make(map[string]struct{}),
-		controlWaiters:    make(map[string]chan Event),
-		recoveryWaiters:   make(map[string]map[chan Event]struct{}),
-		recoveryFailures:  make(map[string]string),
-		backgroundTasks:   make(map[string][]BackgroundTask),
-		emit:              emit,
+		sessionKernels:      make(map[string]string),
+		sessionWorkspaces:   make(map[string]string),
+		sessions:            make(map[string]struct{}),
+		busySessions:        make(map[string]struct{}),
+		researchWorkerTasks: make(map[string]map[string]struct{}),
+		researchRunSessions: make(map[string]string),
+		parked:              make(map[string]*childProcess),
+		parkedAt:            make(map[string]time.Time),
+		probeWaiters:        make(map[string]chan Event),
+		silentSessions:      make(map[string]struct{}),
+		controlWaiters:      make(map[string]chan Event),
+		recoveryWaiters:     make(map[string]map[chan Event]struct{}),
+		recoveryFailures:    make(map[string]string),
+		backgroundTasks:     make(map[string][]BackgroundTask),
+		emit:                emit,
 	}
 }
 
@@ -2344,6 +2446,98 @@ func (s *Supervisor) SendRegisteredMessage(sessionID, prompt string) error {
 	return nil
 }
 
+// ContinueRegisteredMessage queues a continuation if the parent turn is still
+// running, or starts a new turn when its workers finish after the parent settles.
+func (s *Supervisor) ContinueRegisteredMessage(sessionID, prompt string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	prompt = strings.TrimSpace(prompt)
+	if sessionID == "" {
+		return fmt.Errorf("session id is required")
+	}
+	if prompt == "" {
+		return fmt.Errorf("continuation message is required")
+	}
+	if len([]rune(prompt)) > 16000 {
+		return fmt.Errorf("continuation message exceeds 16000 characters")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.sessions[sessionID]; !exists {
+		return s.sessionMissingError(sessionID)
+	}
+	if s.kernelForLocked(sessionID) != KernelPi {
+		return fmt.Errorf("research continuations require a Pi session")
+	}
+	action := "relay_message"
+	if _, busy := s.busySessions[sessionID]; busy {
+		action = "followup_message"
+	}
+	if err := s.writeToSessionLocked(sessionID, map[string]any{
+		"action":         action,
+		"conversationId": sessionID,
+		"prompt":         prompt,
+	}); err != nil {
+		return fmt.Errorf("continue research session: %w", err)
+	}
+	if action == "relay_message" {
+		if s.busySessions == nil {
+			s.busySessions = make(map[string]struct{})
+		}
+		s.busySessions[sessionID] = struct{}{}
+	}
+	return nil
+}
+
+func (s *Supervisor) CancelResearchRun(sessionID, runID string, workerStopMayBeRunning bool) error {
+	sessionID = strings.TrimSpace(sessionID)
+	runID = strings.TrimSpace(runID)
+	if sessionID == "" || runID == "" {
+		return fmt.Errorf("conversation and research run id are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.sessions[sessionID]; !exists {
+		return s.sessionMissingError(sessionID)
+	}
+	if s.kernelForLocked(sessionID) != KernelPi {
+		return fmt.Errorf("research runs require a Pi session")
+	}
+	if err := s.writeToSessionLocked(sessionID, map[string]any{
+		"action":                 "cancel_research_run",
+		"conversationId":         sessionID,
+		"runId":                  runID,
+		"workerStopMayBeRunning": workerStopMayBeRunning,
+	}); err != nil {
+		return fmt.Errorf("cancel research workers: %w", err)
+	}
+	return nil
+}
+
+// TrackResearchRun associates a conversation with its one active durable run so Sidecar loss
+// can interrupt it even between detached worker batches.
+func (s *Supervisor) TrackResearchRun(sessionID, runID string, active bool) {
+	sessionID = strings.TrimSpace(sessionID)
+	runID = strings.TrimSpace(runID)
+	if sessionID == "" || s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if active {
+		if runID == "" {
+			return
+		}
+		if s.researchRunSessions == nil {
+			s.researchRunSessions = make(map[string]string)
+		}
+		s.researchRunSessions[sessionID] = runID
+		return
+	}
+	if current := s.researchRunSessions[sessionID]; current == runID || runID == "" {
+		delete(s.researchRunSessions, sessionID)
+	}
+}
+
 func (s *Supervisor) waitHostControl(
 	sessionID, action string,
 	payload map[string]any,
@@ -3136,6 +3330,8 @@ func (s *Supervisor) Close() {
 	s.sessionKernels = make(map[string]string)
 	s.sessionWorkspaces = make(map[string]string)
 	s.busySessions = make(map[string]struct{})
+	s.researchWorkerTasks = make(map[string]map[string]struct{})
+	s.researchRunSessions = make(map[string]string)
 	s.recoveryFailures = make(map[string]string)
 	s.backgroundTasks = make(map[string][]BackgroundTask)
 	s.mu.Unlock()
@@ -3155,14 +3351,25 @@ func (s *Supervisor) Close() {
 			process.retired.Store(true)
 		}
 	}
-	stopChildProcess(pi)
-	stopChildProcess(dsh)
+	processes := []*childProcess{pi, dsh}
 	for _, process := range parked {
-		stopChildProcess(process)
+		processes = append(processes, process)
 	}
 	for _, process := range retiring {
-		stopChildProcess(process)
+		processes = append(processes, process)
 	}
+	var stopped sync.WaitGroup
+	for _, process := range processes {
+		if process == nil {
+			continue
+		}
+		stopped.Add(1)
+		go func(process *childProcess) {
+			defer stopped.Done()
+			shutdownChildProcess(process)
+		}(process)
+	}
+	stopped.Wait()
 }
 
 func (s *Supervisor) currentWorkspace() string {
@@ -3268,6 +3475,7 @@ func (s *Supervisor) ensureKernelProcessLocked(
 	process := &childProcess{
 		command:   command,
 		stdin:     stdin,
+		done:      make(chan struct{}),
 		workspace: workspace,
 		kernel:    NormalizeKernel(kernel),
 		stderr:    stderr,
@@ -3307,18 +3515,25 @@ func (s *Supervisor) readEvents(kernel string, process *childProcess, stdout io.
 	}
 
 	waitError := process.command.Wait()
+	if process.done != nil {
+		close(process.done)
+	}
 	s.mu.Lock()
+	removedFromRetiring := false
 	if len(s.retiring) > 0 {
 		kept := s.retiring[:0]
 		for _, retiring := range s.retiring {
 			if retiring != process {
 				kept = append(kept, retiring)
+			} else {
+				removedFromRetiring = true
 			}
 		}
 		s.retiring = kept
 	}
 	removedFromParked := false
 	var interrupted []string
+	var interruptedResearch []string
 	if s.parked != nil {
 		if key := sidecarWorkspaceKey(kernel, process.workspace); s.parked[key] == process {
 			delete(s.parked, key)
@@ -3338,11 +3553,15 @@ func (s *Supervisor) readEvents(kernel string, process *childProcess, stdout io.
 		current = s.process == process
 		if current {
 			s.process = nil
+			interruptedResearch = s.researchSessionsForWorkspaceLocked(KernelPi, process.workspace, true)
 			s.dropActiveSessionsLocked(KernelPi, process.workspace)
 		}
 	}
+	if removedFromRetiring && !process.retired.Load() {
+		interrupted = append(interrupted, s.dropRetiredSessionsLocked(process)...)
+	}
 	s.mu.Unlock()
-	if !current && !removedFromParked && !process.retired.Load() {
+	if !current && !removedFromParked && !removedFromRetiring && !process.retired.Load() {
 		return
 	}
 
@@ -3369,8 +3588,10 @@ func (s *Supervisor) readEvents(kernel string, process *childProcess, stdout io.
 		// the active process dying unexpectedly. Sessions that lost their turn with this
 		// process were already told individually.
 		s.reportInterruptedSessions(kernel, interrupted)
+		s.reportInterruptedSessions(kernel, interruptedResearch)
 		return
 	}
+	s.reportInterruptedSessions(kernel, interruptedResearch)
 	s.emitEvent(Event{Engine: kernel, Type: "engine.stopped", Error: errorText, Done: true})
 }
 
@@ -3396,25 +3617,55 @@ func (s *Supervisor) observeTurnLifecycle(raw bridgeEvent, event Event) {
 	delete(s.busySessions, sessionID)
 	if gone {
 		delete(s.sessions, sessionID)
+		delete(s.researchWorkerTasks, sessionID)
+		delete(s.researchRunSessions, sessionID)
 	}
 }
 
 func (s *Supervisor) observeRuntimeEvent(event Event) {
-	if event.Type != "runtime.background_tasks" &&
-		event.Type != "runtime.background_task_controlled" {
-		return
+	switch event.Type {
+	case "runtime.background_tasks", "runtime.background_task_controlled":
+		s.mu.Lock()
+		if s.backgroundTasks == nil {
+			s.backgroundTasks = make(map[string][]BackgroundTask)
+		}
+		if event.SessionID != "" {
+			s.backgroundTasks[event.SessionID] = append(
+				[]BackgroundTask(nil),
+				event.BackgroundTasks...,
+			)
+		}
+		s.mu.Unlock()
+	case "runtime.research_tasks":
+		if event.SessionID == "" {
+			return
+		}
+		s.mu.Lock()
+		if s.researchWorkerTasks == nil {
+			s.researchWorkerTasks = make(map[string]map[string]struct{})
+		}
+		active := s.researchWorkerTasks[event.SessionID]
+		for _, task := range event.ResearchTasks {
+			id := strings.TrimSpace(task.ID)
+			if id == "" {
+				continue
+			}
+			if task.Status == "start" || task.Status == "running" {
+				if active == nil {
+					active = make(map[string]struct{})
+				}
+				active[id] = struct{}{}
+			} else if active != nil {
+				delete(active, id)
+			}
+		}
+		if len(active) == 0 {
+			delete(s.researchWorkerTasks, event.SessionID)
+		} else {
+			s.researchWorkerTasks[event.SessionID] = active
+		}
+		s.mu.Unlock()
 	}
-	s.mu.Lock()
-	if s.backgroundTasks == nil {
-		s.backgroundTasks = make(map[string][]BackgroundTask)
-	}
-	if event.SessionID != "" {
-		s.backgroundTasks[event.SessionID] = append(
-			[]BackgroundTask(nil),
-			event.BackgroundTasks...,
-		)
-	}
-	s.mu.Unlock()
 }
 
 // EmitProductEvent publishes an event the desktop product produced itself,
@@ -3594,6 +3845,8 @@ func normalizeBridgeEvent(raw bridgeEvent, kernels ...string) Event {
 		Choice:             raw.Choice,
 		BackgroundTasks:    raw.Tasks,
 		SubagentTasks:      raw.SubagentTasks,
+		ResearchRunID:      raw.ResearchRunID,
+		ResearchTasks:      raw.ResearchTasks,
 		Jobs:               raw.Jobs,
 		Commands:           raw.Commands,
 		PlanMode:           raw.PlanMode,
@@ -3705,6 +3958,12 @@ func normalizeBridgeEvent(raw bridgeEvent, kernels ...string) Event {
 		event.Type = "runtime.background_tasks"
 	case "subagent_tasks":
 		event.Type = "runtime.subagent_tasks"
+	case "research_tasks":
+		event.Type = "runtime.research_tasks"
+	case "research_cancel_unconfirmed":
+		event.Type = "runtime.research_cancel_unconfirmed"
+	case "research_cancel_confirmed":
+		event.Type = "runtime.research_cancel_confirmed"
 	case "dsh_jobs":
 		event.Type = "runtime.dsh_jobs"
 	case "dsh_commands":

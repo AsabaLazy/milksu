@@ -34,6 +34,7 @@ var backupRoots = []string{
 	filepath.Join("ctf", "memories"),
 	filepath.Join("agent-home", "attachments"),
 	filepath.Join("agent-home", "pi", "sessions"),
+	filepath.Join("research", "artifacts"),
 }
 
 var backupDatabases = []string{
@@ -42,6 +43,7 @@ var backupDatabases = []string{
 	filepath.Join("ctfshow", "catalog.sqlite3"),
 	filepath.Join("runtime", "events.sqlite3"),
 	filepath.Join("usage", "model-usage.sqlite3"),
+	filepath.Join("research", "research.sqlite3"),
 }
 
 var sensitiveBackupPaths = []string{

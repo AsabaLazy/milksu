@@ -9,14 +9,25 @@ function boundedText(value, limit) {
   return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
+export function commandActivityLabel(command) {
+  const value = String(command ?? "").trim();
+  if (!value) return "";
+  const match = value.match(/^(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/);
+  const executable = match?.[1] || match?.[2] || match?.[3] || "";
+  if (!executable || executable.includes("=")) return "shell [arguments hidden]";
+  const name = executable.split(/[\\/]/).pop()
+    .replace(/[^A-Za-z0-9_.+-]/g, "")
+    .slice(0, 48);
+  return name ? `${name} [arguments hidden]` : "command [arguments hidden]";
+}
+
 function commandLabel(meta) {
-  if (typeof meta.command === "string" && meta.command.trim()) {
-    return boundedText(meta.command, 2000);
-  }
-  if (Array.isArray(meta.argv) && meta.argv.length) {
-    return boundedText(meta.argv.join(" "), 2000);
-  }
-  return "";
+  const command = typeof meta.command === "string"
+    ? meta.command
+    : Array.isArray(meta.argv)
+      ? meta.argv.join(" ")
+      : "";
+  return commandActivityLabel(command);
 }
 
 function visibleMeta(meta, now) {

@@ -32,6 +32,7 @@ var restoreManagedPaths = func() []string {
 		filepath.Join("ctf", "memories"),
 		filepath.Join("agent-home", "attachments"),
 		filepath.Join("agent-home", "pi", "sessions"),
+		filepath.Join("research", "artifacts"),
 	}
 	for _, databasePath := range backupDatabases {
 		values = append(
@@ -51,6 +52,7 @@ var restoreManagedDirectoryPaths = []string{
 	filepath.Join("ctf", "memories"),
 	filepath.Join("agent-home", "attachments"),
 	filepath.Join("agent-home", "pi", "sessions"),
+	filepath.Join("research", "artifacts"),
 }
 
 type BackupRestoreStage struct {

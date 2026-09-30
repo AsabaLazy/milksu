@@ -22,6 +22,15 @@ func TestBackupRestoreRoundTripPreservesCredentialsAndCreatesRollback(t *testing
 	)
 	writeBackupFixture(t, filepath.Join(backupRoot, "conversations", "restored.json"), `{"id":"restored"}`)
 	writeBackupFixture(t, filepath.Join(backupRoot, "ctf-workspaces", "job", "notes.md"), "restored evidence")
+	createBackupDatabase(t, filepath.Join(backupRoot, "research", "research.sqlite3"))
+	researchArtifact := filepath.Join(
+		backupRoot,
+		"research",
+		"artifacts",
+		"research_run_1",
+		strings.Repeat("b", 64),
+	)
+	writeBackupFixture(t, researchArtifact, "restored source extract")
 	archive := filepath.Join(t.TempDir(), "backup.zip")
 	if _, err := ExportBackup(context.Background(), backupRoot, archive); err != nil {
 		t.Fatal(err)
@@ -44,7 +53,7 @@ func TestBackupRestoreRoundTripPreservesCredentialsAndCreatesRollback(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if staged.Cancelled || !staged.RequiresRestart || staged.FileCount != 4 {
+	if staged.Cancelled || !staged.RequiresRestart || staged.FileCount != 6 {
 		t.Fatalf("unexpected staged restore: %#v", staged)
 	}
 	result, err := ApplyPendingRestore(liveRoot)
@@ -59,6 +68,14 @@ func TestBackupRestoreRoundTripPreservesCredentialsAndCreatesRollback(t *testing
 		t.Fatalf("current conversation was not replaced: %v", err)
 	}
 	assertBackupFixture(t, filepath.Join(liveRoot, "ctf-workspaces", "job", "notes.md"), "restored evidence")
+	assertBackupFixture(
+		t,
+		filepath.Join(liveRoot, "research", "artifacts", "research_run_1", strings.Repeat("b", 64)),
+		"restored source extract",
+	)
+	if _, err := os.Stat(filepath.Join(liveRoot, "research", "research.sqlite3")); err != nil {
+		t.Fatalf("research database was not restored: %v", err)
+	}
 	assertBackupFixture(t, filepath.Join(liveRoot, "credentials.db"), "provider-secret")
 	assertBackupFixture(t, filepath.Join(liveRoot, "browser", "bridge-pairing.json"), "pairing-secret")
 	assertBackupFixture(t, filepath.Join(liveRoot, "agent-home", "pi", "auth.json"), "pi-secret")
