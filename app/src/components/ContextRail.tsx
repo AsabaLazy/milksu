@@ -1,5 +1,4 @@
 import type { CSSProperties, HTMLAttributes, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
-import ProgressiveBlur from 'react-progressive-blur'
 import { clampCodingRailWidth } from '@/lib/codingRailWidth'
 import { cn } from '@/lib/cn'
 import { useT } from '@/hooks/useUiLocale'
@@ -75,9 +74,6 @@ export default function ContextRail({
           onPointerDown={startResize}
         />
       ) : null}
-      <div className="context-rail__fade" aria-hidden="true">
-        <ProgressiveBlur className="chat-edge-fade-progressive" position="top" intensity={100} />
-      </div>
       {header ? <header className="context-rail__header">{header}</header> : null}
       <div className="context-rail__body">{children}</div>
       {footer ? <footer className="context-rail__footer">{footer}</footer> : null}
@@ -130,15 +126,6 @@ const contextRailCss = `
   background: var(--hover-2);
 }
 
-.context-rail__fade {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  z-index: 1;
-  height: calc(2.5rem + 28px);
-  pointer-events: none;
-}
 .context-rail__header {
   position: absolute;
   top: 0;

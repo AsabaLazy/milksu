@@ -60,7 +60,7 @@ import { toastError } from '@/lib/appToast'
 import { toggleWindowMaximize } from '@/lib/hostPlatform'
 import { isAskMessage } from '@/lib/agentAsk'
 import { nextChatAutoScrollPinned } from '@/lib/chatAutoScroll'
-import { applyChatEdgeChrome } from '@/lib/chatEdgeFade'
+import { applyChatEdgeChrome } from '@/lib/chatEdgeChrome'
 import { assessApprovalRequest } from '@/lib/destructiveTarget'
 import {
   computeTranscriptWindow,
@@ -74,8 +74,8 @@ import AkLoadingMark from '@/components/AkLoadingMark'
 import ChatActivityGroup from '@/components/ChatActivityGroup'
 import ChatProcessFold from '@/components/ChatProcessFold'
 import WindowFileDrop from '@/components/WindowFileDrop'
-import ChatComposer, { type ChatComposerHandle } from '@/components/ChatComposer'
 import { ChatEdgeFade } from '@/components/ChatEdgeFade'
+import ChatComposer, { type ChatComposerHandle } from '@/components/ChatComposer'
 import { ConversationQuoteMenu, selectionQuotePoint } from '@/components/ConversationQuoteMenu'
 import WorkingTray from '@/components/WorkingTray'
 import ChatGeneratedImage from '@/components/ChatGeneratedImage'
@@ -438,9 +438,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   }, [])
   const scrollArea = useRef<HTMLDivElement | null>(null)
   const chatColumnRef = useRef<HTMLDivElement | null>(null)
-  const topChromeRef = useRef<HTMLDivElement | null>(null)
   const bottomChromeRef = useRef<HTMLDivElement | null>(null)
-  const bottomFrostRef = useRef<HTMLDivElement | null>(null)
   const APPROVAL_CONFIRM_TIMEOUT_MS = 3000
   const pendingApprovalMessage = conversation?.messages.find(message => (
     message.approvalState === 'pending'
@@ -2346,11 +2344,12 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
     const column = chatColumnRef.current
     if (!column || emptyCanvas) return undefined
     const apply = () => {
-      const bottom = bottomChromeRef.current?.offsetHeight ?? 0
+      const dock = bottomChromeRef.current
+      const composer = dock?.querySelector<HTMLElement>('.chat-composer')
       applyChatEdgeChrome(column, {
-        top: dockSurface ? 0 : (topChromeRef.current?.offsetHeight ?? 0),
-        bottom,
-        frostBottom: bottomFrostRef.current?.offsetHeight ?? bottom,
+        top: 0,
+        bottom: dock?.offsetHeight ?? 0,
+        frostBottom: composer?.offsetHeight ?? dock?.offsetHeight ?? 0,
       })
     }
     apply()
@@ -2364,15 +2363,9 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
     }
     const observer = new ResizeObserver(apply)
     const watch = bottomChromeRef.current
-    const frostWatch = bottomFrostRef.current
-    if (topChromeRef.current) observer.observe(topChromeRef.current)
     if (watch) {
       observer.observe(watch)
       for (const child of watch.children) observer.observe(child)
-    }
-    if (frostWatch) {
-      observer.observe(frostWatch)
-      for (const child of frostWatch.children) observer.observe(child)
     }
     const mutations = typeof MutationObserver === 'undefined' || !watch
       ? null
@@ -2761,31 +2754,30 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
           </button>
         </div>
       ) : null}
+      {!dockSurface ? (
+        <div className="chat-page__titlebar" aria-label={topbarPresentation.title}>
+          <WorkspaceModuleTopBar
+            module={topbarModule}
+            title={topbarPresentation.title}
+            subtitle={topbarPresentation.subtitle}
+            hideIdentity={codingDraftIdle}
+            windowCaptionEdge={!environmentOpen}
+            actions={restorable ? (
+              <button
+                type="button"
+                className="agent-chrome-icon app-no-drag"
+                aria-label={t('还原小窗', 'Restore window')}
+                title={t('还原小窗', 'Restore window')}
+                onClick={() => onRestore?.()}
+              >
+                <Minimize2 className="size-4" />
+              </button>
+            ) : undefined}
+          />
+        </div>
+      ) : null}
       <div className="coding-workspace relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <main className="chat-main relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface-editor">
-          {!dockSurface ? (
-            <div ref={topChromeRef} className={cn(!emptyCanvas && 'chat-column__top')}>
-            <WorkspaceModuleTopBar
-              module={topbarModule}
-              title={topbarPresentation.title}
-              subtitle={topbarPresentation.subtitle}
-              hideIdentity={codingDraftIdle}
-              windowCaptionEdge={!environmentOpen}
-              actions={restorable ? (
-                <button
-                  type="button"
-                  className="agent-chrome-icon app-no-drag"
-                  aria-label={t('还原小窗', 'Restore window')}
-                  title={t('还原小窗', 'Restore window')}
-                  onClick={() => onRestore?.()}
-                >
-                  <Minimize2 className="size-4" />
-                </button>
-              ) : undefined}
-            />
-            </div>
-          ) : null}
-
           <div
             ref={chatColumnRef}
             className={cn(
@@ -2963,7 +2955,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
               {t('回到最新', 'Latest')}
             </Button>
           ) : null}
-          <ChatEdgeFade showTop={!dockSurface} />
+          <ChatEdgeFade />
           </>
           ) : (
             <div className="flex w-full flex-col items-center px-8">
@@ -3048,9 +3040,6 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
             }}
           />
 
-          {/* 磨砂玻璃只盖输入栏这一截：状态胶囊（第 N/N 步、代码变更、进行中）
-              浮在玻璃上方，出现与否不改变玻璃带高度。滚动停靠仍按整个 dock 量。 */}
-          <div ref={bottomFrostRef}>
           {/* 整窗拖拽加附件（监听在 window 上 ⇒ 拖到窗口任意处都生效；遮罩 fixed inset-0）。
               文件交给 composer 现成的 importCodingFiles（经 ref）⇒ 上限/体积/报错都由它负责。 */}
           <WindowFileDrop
@@ -3161,7 +3150,6 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
             onControlGoal={controlComposerGoal}
             onChangeMcpServers={(servers, digest) => onChangeMcpServers?.(servers, digest)}
           />
-          </div>
           {emptyCanvas && !imageHome && !ctfSession ? (
             <div
               className="agent-thread mt-5 flex flex-wrap items-center justify-center gap-2"
@@ -4011,6 +3999,27 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
 export default ChatPage
 
 const chatPageCss = `
+.chat-page__titlebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  height: var(--shell-title-safe-top);
+  transform: translateY(0.25rem);
+  pointer-events: none;
+}
+
+.chat-page__titlebar > * {
+  pointer-events: auto;
+}
+
+.chat-page__titlebar .workspace-topbar {
+  min-height: var(--shell-title-safe-top);
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
 .chat-window-drag-region {
   display: none;
 }

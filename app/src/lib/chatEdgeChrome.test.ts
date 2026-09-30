@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatEdgeChromePx } from './chatEdgeFade'
+import { chatEdgeChromePx } from './chatEdgeChrome'
 
 describe('chatEdgeChromePx', () => {
   it('rounds a measured chrome box to whole pixels', () => {

@@ -1888,16 +1888,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-/*
- * Transcript scrolls under the top bar and the composer dock. The dock's blank
- * margin does not clip glyphs; MIT react-progressive-blur frosts that band.
- * The frost band covers only the composer (--chat-edge-frost-bottom): status
- * capsules (plan step, change summary, working tray) float above the glass,
- * so appearing or vanishing never changes the band height. Scroll padding and
- * the back-to-latest button still measure the whole dock (--chat-edge-bottom).
- * The composer island stays an opaque card so its own labels stay readable.
- * Do not clip-path the blur: Chromium samples an empty backdrop.
- */
+/* Keep transcript scroll insets aligned with the top bar and composer dock.
+ * Their canvas backgrounds keep scrolled text from showing behind controls. */
 .chat-column {
   --chat-edge-top: 0px;
   --chat-edge-bottom: 0px;
@@ -1948,22 +1940,14 @@
 
 .chat-edge-fade {
   position: absolute;
-  right: 0;
-  left: 0;
+  right: 14%;
+  bottom: 0;
+  left: 6%;
   z-index: 3;
+  height: calc(var(--chat-edge-frost-bottom) + var(--chat-edge-feather));
   pointer-events: none;
   background: transparent;
   overflow: visible;
-}
-
-.chat-edge-fade-top {
-  top: 0;
-  height: calc(var(--chat-edge-top) + var(--chat-edge-feather));
-}
-
-.chat-edge-fade-bottom {
-  bottom: 0;
-  height: calc(var(--chat-edge-frost-bottom, var(--chat-edge-bottom)) + var(--chat-edge-feather));
 }
 
 .chat-edge-fade-progressive {
@@ -1976,4 +1960,9 @@
   height: 100% !important;
   z-index: 2 !important;
   pointer-events: none !important;
+}
+
+[data-agent-conversation].chat-surface-dock .chat-edge-fade {
+  right: 6%;
+  left: 6%;
 }
