@@ -29,6 +29,8 @@ import {
   stopPiBackgroundTask,
 } from "./reviewed-ts/extensions.js";
 import { dropSendAfterAbort } from "./bridge-abort.js";
+import { installRequestHttpDispatcher } from "./bridge-http-dispatcher.js";
+import { applyRequestBudgetToRuntime } from "./bridge-request-budget-stream.js";
 import {
   applyUserMemorySnapshot,
   isCompanionRelay,
@@ -251,6 +253,16 @@ function ignorePipeError(stream, label) {
 
 ignorePipeError(process.stdin, "stdin");
 ignorePipeError(process.stdout, "stdout");
+// MilkSU 自己掌握模型请求的「连接建立」超时。undici 默认 connect.timeout = 10s，
+// 慢连接上会把还在正常上传的大请求误杀成 "Request timed out."；pi 的
+// configureHttpDispatcher 只管 headers/body，SDK 路径也不会调用它。拉齐到首字节
+// 预算上限后，每个请求的预算看门狗（bridge-request-budget.js）才是权威判定。
+installRequestHttpDispatcher({
+  onError: error => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`MilkSU sidecar HTTP dispatcher unavailable: ${message}\n`);
+  },
+});
 const input = createInterface({ input: process.stdin });
 input.on("error", error => {
   const message = error instanceof Error ? error.message : String(error);
@@ -2065,6 +2077,10 @@ async function createSession(command) {
       ])],
       customTools: sessionPolicy.customTools,
     }));
+    // 两段式预算：首字节前看「随请求体积伸缩的预算」，首字节后只看「断流多久」。
+    // 单来源回合不走 milksu-route，所以必须在这里包住 runtime，才能覆盖账号 /
+    // 自有中转 / 双来源三条路径。
+    applyRequestBudgetToRuntime(session.modelRuntime);
     // Pi's SDK constructs the extension runner but deliberately leaves
     // lifecycle binding to embedders. Without this call extension tools appear
     // available, while session_start handlers never run. Durable extensions
