@@ -88,6 +88,69 @@ export interface Message {
   thinkingDurationMs?: number
 }
 
+export type ResearchRunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+export type ResearchTaskStatus = 'launching' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+export type ResearchPhase =
+  | 'collecting'
+  | 'waiting'
+  | 'synthesis_pending'
+  | 'synthesizing'
+  | 'gap_fill_collecting'
+  | 'gap_fill_waiting'
+  | 'final_synthesis_pending'
+  | 'finalizing'
+
+export interface ResearchRun {
+  id: string
+  conversationId: string
+  query: string
+  status: ResearchRunStatus
+  phase: ResearchPhase
+  report?: string
+  workerStopUnconfirmed?: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ResearchTask {
+  id: string
+  runId: string
+  prompt: string
+  status: ResearchTaskStatus
+  workerId: string
+  batch: number
+  result?: string
+}
+
+export interface ResearchSource {
+  id: string
+  runId: string
+  url: string
+  title: string
+  retrievedAt: string
+  artifactRef: string
+}
+
+export interface ResearchCitation {
+  runId: string
+  claim: string
+  sourceId: string
+  verdict: 'supported' | 'unsupported'
+  reason?: string
+}
+
+export interface ResearchSnapshot {
+  run: ResearchRun
+  tasks: ResearchTask[]
+  sources: ResearchSource[]
+  citations: ResearchCitation[]
+}
+
+export interface ResearchSourceDetail {
+  source: ResearchSource
+  extract: string
+}
+
 export type CodingExecutionMode = 'plan' | 'go'
 export type CodingApprovalPolicy =
   | 'read-only'

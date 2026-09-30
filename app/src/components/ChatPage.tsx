@@ -73,6 +73,7 @@ import CodingChangesPanel from '@/components/CodingChangesPanel'
 import CodingComputerUsePanel from '@/components/CodingComputerUsePanel'
 import CodingComputerUsePermissionDialog from '@/components/CodingComputerUsePermissionDialog'
 import CodingMCPReviewCard from '@/components/CodingMCPReviewCard'
+import DeepResearchStatusCard from '@/components/DeepResearchStatusCard'
 import MarkdownContent from '@/components/MarkdownContent'
 import ContextRail from '@/components/ContextRail'
 import WorkspaceModuleTopBar from '@/components/WorkspaceModuleTopBar'
@@ -2741,6 +2742,21 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                 className={cn('agent-thread min-w-0', dockSurface ? 'agent-thread--dock' : '')}
                 onContextMenu={openQuoteMenu}
               >
+                {agentKernel === 'pi' && conversation?.id ? (
+                  <DeepResearchStatusCard
+                    key={conversation.id}
+                    conversationId={conversation.id}
+                    canResume={
+                      effectiveExecutionMode === 'go'
+                      && effectiveApprovalPolicy !== 'read-only'
+                      && !goalMode
+                      && !running
+                    }
+                    onResume={runId => onSend?.(
+                      `/skill:deep-research Resume interrupted research run ${runId}. Call milksu_workspace get_research_run and resume_research_run for this exact run before continuing. Restore its persisted plan, sources, worker results, and Sidecar context; do not start a new run.`,
+                    )}
+                  />
+                ) : null}
                 {quoteSelection ? (
                   <ConversationQuoteMenu
                     text={quoteSelection.text}

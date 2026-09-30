@@ -104,6 +104,50 @@ describe('desktop command adapter', () => {
     }])
   })
 
+  it('maps durable research reads and cancellation to the renderer RPC allowlist', async () => {
+    const run = {
+      id: 'research_run_1',
+      conversationId: 'pi-1',
+      query: 'Compare release dates',
+      status: 'interrupted',
+      phase: 'collecting',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-02T00:00:00Z',
+    }
+    const snapshot = { run, tasks: [], sources: [], citations: [] }
+    const sourceDetail = {
+      source: {
+        id: 'source-1',
+        runId: run.id,
+        url: 'https://example.test',
+        title: 'Example',
+        retrievedAt: '2026-01-01T00:00:00Z',
+        artifactRef: 'a'.repeat(64),
+      },
+      extract: 'Saved source text',
+    }
+    const responses: unknown[] = [[run], snapshot, sourceDetail, 'Saved report', run]
+    const invoke = vi.fn(async () => responses.shift())
+    Object.defineProperty(window, 'milksu', {
+      configurable: true,
+      value: { invoke },
+    })
+
+    await expect(invokeCommand('list_research_runs', { conversationId: 'pi-1' })).resolves.toEqual([run])
+    await expect(invokeCommand('get_research_run', { conversationId: 'pi-1', runId: run.id })).resolves.toEqual(snapshot)
+    await expect(invokeCommand('read_research_source', { conversationId: 'pi-1', sourceId: 'source-1' })).resolves.toEqual(sourceDetail)
+    await expect(invokeCommand('read_research_report', { conversationId: 'pi-1', runId: run.id })).resolves.toBe('Saved report')
+    await expect(invokeCommand('cancel_research_run', { conversationId: 'pi-1', runId: run.id })).resolves.toEqual(run)
+
+    expect(invoke.mock.calls).toEqual([
+      ['ListResearchRuns', ['pi-1']],
+      ['GetResearchRun', ['pi-1', run.id]],
+      ['ReadResearchSource', ['pi-1', 'source-1']],
+      ['ReadResearchReport', ['pi-1', run.id]],
+      ['CancelResearchRun', ['pi-1', run.id]],
+    ])
+  })
+
   it('passes an exact queued-message removal through Desktop RPC', async () => {
     const invoke = vi.fn(async () => undefined)
     Object.defineProperty(window, 'milksu', {

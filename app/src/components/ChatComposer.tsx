@@ -1495,11 +1495,23 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
     const attachments = [...pendingAttachments]
     const text = textValue.trim() || (attachments.length ? t('请检查这些附件并完成我接下来需要处理的任务。', 'Please review these attachments and complete the task I need next.') : '')
     if (!text) return
-    if (skillToken === 'deep-research' && kernel === 'dsh') {
+    const invokesDeepResearch = skillToken === 'deep-research'
+      || /^\/skill:deep-research(?:\s|$)/u.test(text)
+    if (invokesDeepResearch && kernel !== 'pi') {
       setAttachmentError(t('深度研究仅支持 Pi。请切换到 Pi 后再发送。', 'Deep Research is only available with Pi. Select Pi before sending.'))
       return
     }
-    if (skillToken === 'deep-research' && parentTurnActive) {
+    if (
+      invokesDeepResearch
+      && (executionMode !== 'go' || approvalPolicy === 'read-only' || goalMode)
+    ) {
+      setAttachmentError(t(
+        '深度研究需要 Pi Go 模式和可写权限。请切换到 Go 并关闭只读策略后再发送。',
+        'Deep Research requires Pi Go mode with write access. Switch to Go and disable the read-only policy before sending.',
+      ))
+      return
+    }
+    if (invokesDeepResearch && parentTurnActive) {
       setAttachmentError(t('请等待当前回合结束后再启动深度研究。', 'Wait for the current turn to finish before starting Deep Research.'))
       return
     }
@@ -2119,7 +2131,13 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
                           <DropdownMenuItem
                             key={skill.name}
                             className="composer-add-option"
-                            disabled={!workspaceReady || (skill.name === 'deep-research' && (parentTurnActive || goalMode))}
+                            disabled={!workspaceReady || (skill.name === 'deep-research' && (
+                              kernel !== 'pi'
+                              || executionMode !== 'go'
+                              || approvalPolicy === 'read-only'
+                              || parentTurnActive
+                              || goalMode
+                            ))}
                             onSelect={() => insertSkillToken(skill.name)}
                           >
                             <Icon className="size-4 shrink-0" />
