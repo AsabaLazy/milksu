@@ -599,6 +599,11 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   const chatTranscriptLengthRef = useRef(0)
   const transcriptWindowStartRef = useRef(0)
   const transcriptAnchorRef = useRef<{ id: string; offset: number } | null>(null)
+  // 用户滚动意图：手势/惯性进行中绝不写 scrollTop —— 程序写入会打断浏览器正在滑行的惯性滚动。
+  const userScrollActiveRef = useRef(false)
+  // 手势期间被推迟的窗口滑动（哨兵触发），等滚动结束后再补，避免补偿写入掐断惯性。
+  const pendingTranscriptSlideRef = useRef<'earlier' | 'later' | null>(null)
+  const userScrollEndTimerRef = useRef<number | null>(null)
   const transcriptTopSentinelRef = useRef<HTMLDivElement | null>(null)
   const transcriptBottomSentinelRef = useRef<HTMLDivElement | null>(null)
   const codingBrowserResizeObserver = useRef<ResizeObserver | null>(null)
@@ -2247,6 +2252,29 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
     setTranscriptWindowStart(next)
   }
 
+  // 滚动结束后清掉用户意图，并把手势期间攒下的窗口滑动补上（此时写 scrollTop 不再打断惯性）。
+  function endUserScroll() {
+    if (userScrollEndTimerRef.current !== null) {
+      window.clearTimeout(userScrollEndTimerRef.current)
+      userScrollEndTimerRef.current = null
+    }
+    if (!userScrollActiveRef.current && !pendingTranscriptSlideRef.current) return
+    userScrollActiveRef.current = false
+    const pending = pendingTranscriptSlideRef.current
+    pendingTranscriptSlideRef.current = null
+    if (pending) slideTranscript(pending)
+    // 手势期间可能还在钉底但内容长了（贴尾被压制）：结束后立刻补一次，别让读者掉出底部。
+    if (chatAutoScrollPinned.current) void scrollChatToBottom()
+  }
+
+  function markUserScrollActive() {
+    userScrollActiveRef.current = true
+    if (userScrollEndTimerRef.current !== null) window.clearTimeout(userScrollEndTimerRef.current)
+    // 兜底：不依赖 scrollend 的内核里，滚动静默一段时间后也要恢复补偿，别把它永久冻结。
+    // 惯性期间 scroll 事件持续触发并顺延这个计时器，所以不会在半路误判结束。
+    userScrollEndTimerRef.current = window.setTimeout(endUserScroll, 320)
+  }
+
   function jumpToLatestTranscript() {
     chatAutoScrollPinned.current = true
     setChatAutoScrollPinnedState(true)
@@ -2279,15 +2307,16 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   }
 
   async function scrollChatToBottom(force = false) {
-    if (!force && !chatAutoScrollPinned.current) return
+    if (!force && (userScrollActiveRef.current || !chatAutoScrollPinned.current)) return
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-    if (!force && !chatAutoScrollPinned.current) return
+    // 等 rAF 期间用户可能已经开始滚动：手势/惯性中绝不补写，否则会打断惯性。
+    if (!force && (userScrollActiveRef.current || !chatAutoScrollPinned.current)) return
     const element = scrollArea.current
     if (!element) return
     element.scrollTop = element.scrollHeight
     lastChatScrollTop.current = element.scrollTop
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-    if (!force && !chatAutoScrollPinned.current) return
+    if (!force && (userScrollActiveRef.current || !chatAutoScrollPinned.current)) return
     if (scrollArea.current) {
       scrollArea.current.scrollTop = scrollArea.current.scrollHeight
       lastChatScrollTop.current = scrollArea.current.scrollTop
@@ -2555,12 +2584,50 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
     const thread = element?.querySelector('.agent-thread')
     if (!element || !thread) return undefined
     const observer = new ResizeObserver(() => {
+      // 用户手势/惯性期间绝不写 scrollTop：贴尾补偿会把正在滑行的滚动掐断。
+      if (userScrollActiveRef.current) return
       if (!chatAutoScrollPinned.current) return
       element.scrollTop = element.scrollHeight
       lastChatScrollTop.current = element.scrollTop
     })
     observer.observe(thread)
     return () => observer.disconnect()
+  }, [emptyCanvas])
+
+  // 用户滚动意图：wheel/touch/pointer 标记开始，scrollend（或滚动静默兜底）标记结束。
+  // 手势与惯性期间不写 scrollTop，是保住原生惯性滚动的关键。
+  useEffect(() => {
+    if (emptyCanvas) return undefined
+    const element = scrollArea.current
+    if (!element) return undefined
+    const onWheel = () => markUserScrollActive()
+    const onTouchStart = () => markUserScrollActive()
+    const onTouchMove = () => markUserScrollActive()
+    const onPointerDown = () => markUserScrollActive()
+    const onScroll = () => {
+      if (userScrollActiveRef.current) markUserScrollActive()
+    }
+    const onScrollEnd = () => endUserScroll()
+    element.addEventListener('wheel', onWheel, { passive: true })
+    element.addEventListener('touchstart', onTouchStart, { passive: true })
+    element.addEventListener('touchmove', onTouchMove, { passive: true })
+    element.addEventListener('pointerdown', onPointerDown, { passive: true })
+    element.addEventListener('scroll', onScroll, { passive: true })
+    element.addEventListener('scrollend', onScrollEnd)
+    return () => {
+      element.removeEventListener('wheel', onWheel)
+      element.removeEventListener('touchstart', onTouchStart)
+      element.removeEventListener('touchmove', onTouchMove)
+      element.removeEventListener('pointerdown', onPointerDown)
+      element.removeEventListener('scroll', onScroll)
+      element.removeEventListener('scrollend', onScrollEnd)
+      if (userScrollEndTimerRef.current !== null) {
+        window.clearTimeout(userScrollEndTimerRef.current)
+        userScrollEndTimerRef.current = null
+      }
+      userScrollActiveRef.current = false
+      pendingTranscriptSlideRef.current = null
+    }
   }, [emptyCanvas])
 
   // 哨兵：接近窗口上/下缘 800px 内时把窗口整体滑动一格，挂载量保持恒定。
@@ -2572,8 +2639,16 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
     const observer = new IntersectionObserver(entries => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue
-        if (entry.target === transcriptTopSentinelRef.current) slideTranscript('earlier')
-        else if (entry.target === transcriptBottomSentinelRef.current) slideTranscript('later')
+        const direction = entry.target === transcriptTopSentinelRef.current
+          ? 'earlier'
+          : entry.target === transcriptBottomSentinelRef.current ? 'later' : null
+        if (!direction) continue
+        // 用户正在滚：先记账，等滚动结束再滑动窗口并做锚定补偿。
+        if (userScrollActiveRef.current) {
+          pendingTranscriptSlideRef.current = direction
+          continue
+        }
+        slideTranscript(direction)
       }
     }, { root: element, rootMargin: '800px 0px' })
     if (transcriptTopSentinelRef.current) observer.observe(transcriptTopSentinelRef.current)
