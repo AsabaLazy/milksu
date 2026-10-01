@@ -19,7 +19,7 @@
 import { Agent, setGlobalDispatcher } from "undici";
 import { requestBudgetThresholds } from "./bridge-request-budget.js";
 
-/** 连接超时与首字节预算上限对齐（默认 120s），保证每个请求的预算看门狗才是权威。 */
+/** 连接超时与首字节预算上限对齐（默认 300s，随 MILKSU_PI_REQUEST_TTFB_MAX_MS），保证每个请求的预算看门狗才是权威。 */
 export function connectTimeoutMs(environment = process.env) {
   return requestBudgetThresholds(environment).ttfbMaxMs;
 }
