@@ -2080,8 +2080,16 @@ async function createSession(command) {
     }));
     // 两段式预算：首字节前看「随请求体积伸缩的预算」，首字节后只看「断流多久」。
     // 单来源回合不走 milksu-route，所以必须在这里包住 runtime，才能覆盖账号 /
-    // 自有中转 / 双来源三条路径。
-    applyRequestBudgetToRuntime(session.modelRuntime);
+    // 自有中转 / 双来源三条路径。软阈值到点只发一条 `turn.stall_warning`，
+    // 由渲染层的看门狗举牌并通知读者；到硬上限才真正 abort 这一回合。
+    applyRequestBudgetToRuntime(session.modelRuntime, {
+      onWarn: warning => emit(conversationId, "turn.stall_warning", {
+        stallStage: warning?.stage ?? "ttfb",
+        stallKind: warning?.kind ?? "ttfb",
+        budgetMs: warning?.budgetMs ?? 0,
+        payloadBytes: warning?.payloadBytes ?? 0,
+      }),
+    });
     // Pi's SDK constructs the extension runner but deliberately leaves
     // lifecycle binding to embedders. Without this call extension tools appear
     // available, while session_start handlers never run. Durable extensions

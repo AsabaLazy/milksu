@@ -1165,6 +1165,19 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   const stallKind = conversations.activeStallKind
   const stalled = stallKind === 'engine-gone' || stallKind === 'model-stalled'
   const stalledElapsed = formatDemoElapsed(streamStaleSeconds * 1000)
+  // 预算软告警：sidecar 自己说「请求超过预算」，把原因和体积说给读者，而不是笼统地说「停滞」。
+  const engineWarning = conversations.activeEngineWarning
+  const engineWarningLabel = engineWarning
+    ? (engineWarning.payloadBytes > 0
+        ? t(
+            `模型请求已超过等待预算 ${formatDemoElapsed(engineWarning.budgetMs)}（请求约 ${(engineWarning.payloadBytes / (1024 * 1024)).toFixed(1)}MB），引擎仍在等。`,
+            `The model request passed its ${formatDemoElapsed(engineWarning.budgetMs)} budget (about ${(engineWarning.payloadBytes / (1024 * 1024)).toFixed(1)}MB) and the engine is still waiting.`,
+          )
+        : t(
+            `模型请求已超过等待预算 ${formatDemoElapsed(engineWarning.budgetMs)}，引擎仍在等。`,
+            `The model request passed its ${formatDemoElapsed(engineWarning.budgetMs)} budget and the engine is still waiting.`,
+          ))
+    : ''
   // 停滞进入边沿：从“没停滞”变成停滞的那一刻发一条系统通知（重试还是停止）。
   // 依赖只有 stalled 翻转 + 会话切换 ⇒ 每秒重渲染不会重复发；
   // 去重再兜一层：composable 按 会话+回合起点 记账（重入/StrictMode 也不会重复投递）。
@@ -3076,10 +3089,12 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                   <span className="flex flex-wrap items-center gap-2" data-testid="stalled-turn">
                     <span data-testid="stalled-turn-label">
                       {stallKind === 'model-stalled'
-                        ? t(
-                            `已停滞 ${stalledElapsed}：模型请求没有再输出，引擎进程还在。`,
-                            `Stalled for ${stalledElapsed}: the model request stopped producing output while the engine process is still alive.`,
-                          )
+                        ? (engineWarning
+                            ? engineWarningLabel
+                            : t(
+                                `已停滞 ${stalledElapsed}：模型请求没有再输出，引擎进程还在。`,
+                                `Stalled for ${stalledElapsed}: the model request stopped producing output while the engine process is still alive.`,
+                              ))
                         : t(
                             `已停滞 ${stalledElapsed}：引擎进程的心跳已停。`,
                             `Stalled for ${stalledElapsed}: the engine process stopped sending heartbeats.`,
@@ -3103,6 +3118,21 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                     >
                       {t('停止', 'Stop')}
                     </Button>
+                    {conversations.activeEngineUnresponsive ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        data-testid="restart-engine"
+                        title={t(
+                          '当前回合会中断，同工作区其它正在跑的会话也会一起中断；重启后可用「重试」在全新引擎上重发。',
+                          'The current turn will be interrupted, along with any other running conversation in this workspace; after the restart, Retry sends it again on a fresh engine.',
+                        )}
+                        onClick={() => void conversations.restartEngine(conversation?.id ?? '')}
+                      >
+                        {t('重启引擎', 'Restart engine')}
+                      </Button>
+                    ) : null}
                   </span>
                 ) : (
                   t(`等待中（已 ${streamStaleSeconds}s）`, `Waiting… (${streamStaleSeconds}s)`)

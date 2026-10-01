@@ -8,8 +8,9 @@
  * streamFn），因此在这里包住它，账号 / 自有中转 / 双来源三条路径都覆盖到。
  *
  * 行为：请求前建看门狗，把 `signal` 交给真正的请求；首个事件前是首字节预算，
- * 之后改用断流检测。判死时把 SDK 的「Request was aborted.」换成带阶段与预算的可读错误，
- * 其余事件原样透传 —— 不改变正常回合的任何语义。
+ * 之后改用断流检测。软阈值到点时先通过 `onWarn` 报「疑似挂死」（渲染层据此举牌、通知，
+ * 决定权留给读者），到硬上限才判死并把 SDK 的「Request was aborted.」换成带阶段与预算的
+ * 可读错误，其余事件原样透传 —— 不改变正常回合的任何语义。
  */
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
@@ -73,6 +74,7 @@ export function applyRequestBudgetToRuntime(runtime, {
   thresholds = requestBudgetThresholds,
   estimateBytes = estimateRequestBytes,
   timerApi,
+  onWarn,
 } = {}) {
   if (!runtime || typeof runtime.streamSimple !== "function") return false;
   if (runtime[APPLIED]) return true;
@@ -84,6 +86,7 @@ export function applyRequestBudgetToRuntime(runtime, {
       thresholds: typeof thresholds === "function" ? thresholds() : thresholds,
       parentSignal: options?.signal,
       timerApi,
+      onWarn,
     });
     let inner;
     try {

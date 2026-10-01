@@ -13,6 +13,7 @@
 | [产品代码准入](product-code-admission.md) | 新能力进生产依赖图之前的四道门 |
 | [产品回归循环](product-regression-loop.md) | 怎么跑 `npm run test:product-loop` |
 | [产品回归自我保护](product-loop-self-protection.md) | 产品回归从 MilkSU 内部启动时保护宿主进程 |
+| [挂死生命周期](stall-lifecycle-warn-before-kill.md) | 请求预算先告警后掐死、重启引擎的取舍。数值在 `sidecar/pi/bridge-request-budget.js` |
 | [三端打包与发版](release-process.md) | 发版操作，含 models.dev 对照 |
 | [Linux 安装与桌面](linux-platform-support.md) | 共用 x64 DEB + tarball；ARM 只测不发；GNOME Portal |
 | [macOS 签名与公证](macos-signing-and-notarization.md) | 签名材料不进仓库 |

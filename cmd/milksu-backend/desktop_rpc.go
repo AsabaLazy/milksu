@@ -276,6 +276,7 @@ func desktopAppMethods(app *App) map[string]desktopAppMethod {
 		"ConfirmCompanionDispatch":             rendererDesktopMethod(app.ConfirmCompanionDispatch),
 		"AbortMessage":                         rendererDesktopMethod(app.AbortMessage),
 		"AbortSubagent":                        rendererDesktopMethod(app.AbortSubagent),
+		"RestartEngine":                        rendererDesktopMethod(app.RestartEngine),
 		"RespondToolApproval":                  rendererDesktopMethod(app.RespondToolApproval),
 		"RefreshCodingBackgroundTasks":         rendererDesktopMethod(app.RefreshCodingBackgroundTasks),
 		"StartCodingBackgroundTask":            rendererDesktopMethod(app.StartCodingBackgroundTask),

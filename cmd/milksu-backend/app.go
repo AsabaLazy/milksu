@@ -1914,6 +1914,13 @@ func (a *App) AbortSubagent(conversationID string, subagentID string) error {
 	return a.engines.AbortMessage(conversationID, subagentID)
 }
 
+// RestartEngine kills the wedged Sidecar that serves a conversation and clears its sessions so the
+// next dispatch spawns a fresh process. It is the reader's last resort when abort_session is written
+// into a Sidecar that has stopped reading stdin. The current turn is lost; the renderer says so
+// before offering the action. See engine.Supervisor.RestartEngine.
+func (a *App) RestartEngine(conversationID string) error {
+	return a.engines.RestartEngine(conversationID)
+}
 func (a *App) SteerMessage(conversationID, prompt string) error {
 	return a.engines.SteerMessage(conversationID, prompt)
 }

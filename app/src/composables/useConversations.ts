@@ -88,6 +88,7 @@ import {
 import { modelContextWindowOverride, resolveModelContextWindow } from '@/lib/knownContextWindow'
 import { installedModelContextWindows } from '@/modelCatalog'
 import { decideTurnStall, resolveTurnStallConfig, type TurnStallKind } from '@/lib/turnStall'
+import { decideEngineRestart, resolveEngineRestartConfig } from '@/lib/engineRestart'
 import {
   completedNotifyKey,
   defaultTaskNotifySwitch,
@@ -348,6 +349,11 @@ interface AgentEvent {
   planMode?: DshPlanMode
   resumed?: boolean
   aborted?: boolean
+  /** 预算软告警（turn.stall_warning）：阶段 ttfb/stream、软阈值与请求体积。 */
+  stallStage?: string
+  stallKind?: string
+  budgetMs?: number
+  payloadBytes?: number
   steering?: string[]
   followUp?: string[]
   /** Sessions a deliberately stopped engine instance was serving. */
@@ -1301,25 +1307,20 @@ export function createConversationsRuntime(options?: {
     return ''
   }
 
-  /**
-   * 重试一个已停滞的回合：先把这个卡住的回合从路上拿走，再把最后一条没被回答的用户消息
-   * 走正常后端路径重发一遍。**本地结算先发生**，所以即使 sidecar 永远不回应 abort，界面也
-   * 会离开“停滞”状态。派发成功返回 true；没有东西可重发返回 false。
-   */
-  async function wakeStuckTurn(conversationId: string): Promise<boolean> {
-    const id = String(conversationId ?? '').trim()
-    if (!id) return false
-    const prompt = lastUnansweredPrompt(id)
-    if (!prompt) return false
-    try {
-      await invokeCommand('abort_message', { conversationId: id })
-    } catch {
-      // 尽力而为：下面的本地结算无论如何都要发生。
-    }
+  /** 卡住回合的本地结算：清运行与停滞标记，不发消息、不派发。 */
+  function settleStuckTurnLocally(id: string) {
     finishRun(id)
     clearAbortStalled(id)
     markQueueStalled(id, false)
     activeTurnPolicies.delete(id)
+    clearEngineStallWarning(id)
+  }
+
+  /**
+   * 本地结算先发生，再把最后一条没被回答的用户消息走正常后端路径重发。
+   * 调用方负责先把 sidecar 里的旧回合停掉（abort 或重启）。派发成功返回 true。
+   */
+  async function redispatchStuckTurn(id: string, prompt: string): Promise<boolean> {
     noteStreamEvent(id)
     s.runningIds = new Set(s.runningIds).add(id)
     patchTurnStatus(id, state => applySessionRunStarted(state))
@@ -1343,6 +1344,50 @@ export function createConversationsRuntime(options?: {
       }))
       return false
     }
+  }
+
+  /**
+   * 重试一个已停滞的回合：先把这个卡住的回合从路上拿走，再把最后一条没被回答的用户消息
+   * 走正常后端路径重发一遍。**本地结算先发生**，所以即使 sidecar 永远不回应 abort，界面也
+   * 会离开“停滞”状态。派发成功返回 true；没有东西可重发返回 false。
+   */
+  async function wakeStuckTurn(conversationId: string): Promise<boolean> {
+    const id = String(conversationId ?? '').trim()
+    if (!id) return false
+    const prompt = lastUnansweredPrompt(id)
+    if (!prompt) return false
+    noteAbortSent(id)
+    try {
+      await invokeCommand('abort_message', { conversationId: id })
+    } catch {
+      // 尽力而为：下面的本地结算无论如何都要发生。
+    }
+    settleStuckTurnLocally(id)
+    return redispatchStuckTurn(id, prompt)
+  }
+
+  /**
+   * 读者亲手点「重启引擎」：杀掉不响应 abort 的 sidecar，本地结算这个回合，再在全新的
+   * sidecar 上重发最后一条没被回答的用户消息。**不自动重启** —— 只有 UI 调用时才发生。
+   * 重启会丢当前回合，所以调用方必须先把代价告诉读者。
+   */
+  async function restartEngine(conversationId: string): Promise<boolean> {
+    const id = String(conversationId ?? '').trim()
+    if (!id) return false
+    const prompt = lastUnansweredPrompt(id)
+    // 先记账：这个会话的引擎重启事件回来时，用它判断本地是否已经接手了结算与重发。
+    restartRequestedAtById.set(id, Date.now())
+    try {
+      await invokeCommand('restart_engine', { conversationId: id })
+    } catch {
+      // 杀不掉也要走本地结算：读者已经点了，界面不能还卡在「停滞」。
+    }
+    settleStuckTurnLocally(id)
+    if (!prompt) {
+      restartRequestedAtById.delete(id)
+      return true
+    }
+    return redispatchStuckTurn(id, prompt)
   }
 
   /**
@@ -1643,6 +1688,34 @@ export function createConversationsRuntime(options?: {
   const TURN_STALL = resolveTurnStallConfig()
   const lastStreamEventByConversation = new Map<string, number>()
   const heartbeatAtByConversation = new Map<string, number>()
+  // 预算软告警：sidecar 报了「请求超过它自己的预算」，但还没硬掐。真实事件到来即清掉。
+  const engineWarnedAtByConversation = new Map<string, { at: number; stage: string; budgetMs: number; payloadBytes: number }>()
+  // 只记**真实引擎事件**的时刻（心跳不算，本地乐观标记也不算）：abort 无响应的判据要用它。
+  const engineProgressAtByConversation = new Map<string, number>()
+  // 最近一次 abort_session 发出的时刻：用来判定 sidecar 是否不响应 abort。
+  const abortSentAtByConversation = new Map<string, number>()
+  // 读者点过「重启引擎」的时刻（按会话）：引擎重启事件回来时，用它判断这个回合是不是
+  // 已经在新引擎上重发过了（新回合的起点晚于重启请求）。
+  const restartRequestedAtById = new Map<string, number>()
+  const ENGINE_RESTART = resolveEngineRestartConfig()
+
+  function noteEngineStallWarning(
+    conversationId: string | undefined,
+    warning: { stage: string; budgetMs: number; payloadBytes: number },
+  ) {
+    if (!conversationId) return
+    engineWarnedAtByConversation.set(conversationId, { at: Date.now(), ...warning })
+    // 借心跳计数器触发一次重渲染：告警必须立刻举牌，不能等到下一帧时钟。
+    s.heartbeatTick = s.heartbeatTick + 1
+  }
+  function clearEngineStallWarning(conversationId: string | undefined) {
+    if (!conversationId) return
+    engineWarnedAtByConversation.delete(conversationId)
+  }
+  function noteAbortSent(conversationId: string | undefined) {
+    if (!conversationId) return
+    abortSentAtByConversation.set(conversationId, Date.now())
+  }
   function noteStreamEvent(conversationId: string, at = Date.now()) {
     if (conversationId) lastStreamEventByConversation.set(conversationId, at)
   }
@@ -1778,6 +1851,7 @@ export function createConversationsRuntime(options?: {
       key: completedNotifyKey(conversationId, at),
     })
   }
+
   function noteToolRunning(
     conversationId: string | undefined,
     toolCallId?: string,
@@ -1875,10 +1949,30 @@ export function createConversationsRuntime(options?: {
       toolRunning: activeToolRunning(),
       queuedBehind: Boolean(activeQueuedBehind()),
       engineAlive: activeEngineAlive(),
+      engineWarned: engineWarnedAtByConversation.has(id),
       quietMs: last > 0 ? Date.now() - last : 0,
       hasEvent: last > 0,
       config: TURN_STALL,
     })
+  })
+  // 停滞时的第三个出口：sidecar 不再响应 abort（心跳已停，或 abort 满宽限仍无新事件），
+  // 就给出「重启引擎」。重启只能由读者亲手点，这个判据不触发任何动作。
+  const activeEngineUnresponsive = (() => {
+    const id = s.activeId
+    if (!id) return false
+    return decideEngineRestart({
+      running: s.runningIds.has(id),
+      stallKind: activeStallKind(),
+      abortSentAt: abortSentAtByConversation.get(id) ?? 0,
+      lastEventAt: engineProgressAtByConversation.get(id) ?? 0,
+      config: ENGINE_RESTART,
+    })
+  })
+  // 当前会话最近一条预算软告警（用于把「为什么算停滞」告诉读者）；没有则为 null。
+  const activeEngineWarning = (() => {
+    const id = s.activeId
+    if (!id) return null
+    return engineWarnedAtByConversation.get(id) ?? null
   })
   const activeResumed = (() => (
     s.activeId ? s.continuity.resumed.has(s.activeId) : false
@@ -2090,6 +2184,7 @@ export function createConversationsRuntime(options?: {
     const parentLiveBefore = parentId ? liveWorkingCountFor(parentId) : 0
     clearTurnRunClock(id)
     clearAbortStalled(id)
+    clearEngineStallWarning(id)
     const next = projectCodingRunFinished(
       s.runningIds,
       s.abortingIds,
@@ -3394,6 +3489,8 @@ export function createConversationsRuntime(options?: {
       s.abortingIds = requested.aborting
       clearAbortStalled(id)
     }
+    // 记下 abort 发出的时刻：满宽限仍无新事件就说明 sidecar 不响应 abort，给出重启入口。
+    noteAbortSent(id)
     try {
       // AbortMessage only submits the interrupt to the Sidecar. Keep the task
       // visibly running until its terminal engine event proves Pi is idle.
@@ -3724,11 +3821,61 @@ export function createConversationsRuntime(options?: {
         compaction,
         contextComposition,
         sessions,
+        stallStage,
+        budgetMs,
+        payloadBytes,
       } = event.payload
+      // 预算软告警：sidecar 说「请求已超过它自己的预算」，但还没硬掐。它不是进展，
+      // 不能走 noteStreamEvent；交给看门狗立刻举牌（不必等到本地静默阈值）。
+      if (type === 'turn.stall_warning') {
+        const warnedId = String(sessionId ?? '') || String(s.activeId ?? '')
+        noteEngineStallWarning(warnedId, {
+          stage: String(stallStage ?? 'ttfb'),
+          budgetMs: Number(budgetMs) || 0,
+          payloadBytes: Number(payloadBytes) || 0,
+        })
+        return
+      }
+      // 引擎重启：读者点过重启的那个会话，本地已经接手结算与重发，事件只当回执；
+      // 同一个 sidecar 服务的其它会话由这条事件结算，否则它们会永远停在「正在跑」。
+      if (type === 'engine.restarted') {
+        const restartedId = String(sessionId ?? '').trim()
+        if (!restartedId) return
+        const requestedAt = restartRequestedAtById.get(restartedId)
+        if (requestedAt !== undefined) {
+          restartRequestedAtById.delete(restartedId)
+          // 新回合的起点晚于重启请求 ⇒ 本地已经在新引擎上重发过了，事件只当回执。
+          const runStartedAt = s.turnStatusById.get(restartedId)?.runStartedAt ?? 0
+          if (runStartedAt >= requestedAt) return
+        }
+        const wasRunning = s.runningIds.has(restartedId) || s.abortingIds.has(restartedId)
+        settleStuckTurnLocally(restartedId)
+        if (wasRunning && s.conversations.some(item => item.id === restartedId)) {
+          update(restartedId, conversation => ({
+            ...conversation,
+            messages: [...settleRunningToolMessages(conversation.messages), {
+              id: crypto.randomUUID(),
+              role: 'assistant' as const,
+              content: t('引擎已重启，当前回合已中断。', 'The engine was restarted, so the current turn was interrupted.'),
+              timestamp: Date.now(),
+              status: 'done' as const,
+            }],
+          }))
+          scheduleSave(restartedId)
+        }
+        return
+      }
       // 任何事件都证明这个对话的流又活了——但心跳除外：
       // 心跳只是“引擎还在”，不是“有进展”。
       if (type !== 'turn.heartbeat') {
-        noteStreamEvent(String(sessionId ?? '') || String(s.activeId ?? ''))
+        const progressId = String(sessionId ?? '') || String(s.activeId ?? '')
+        noteStreamEvent(progressId)
+        // 真实引擎事件到了：预算告警过期，abort 也算得到了回应（进程在动）。
+        if (progressId) {
+          clearEngineStallWarning(progressId)
+          engineProgressAtByConversation.set(progressId, Date.now())
+          abortSentAtByConversation.delete(progressId)
+        }
       }
       if (type === 'turn.heartbeat') {
         noteTurnHeartbeat(sessionId)
@@ -4494,8 +4641,11 @@ export function createConversationsRuntime(options?: {
     get activeEngineAlive() { return activeEngineAlive() },
     get activeQueuedBehind() { return activeQueuedBehind() },
     get activeStallKind() { return activeStallKind() },
+    get activeEngineUnresponsive() { return activeEngineUnresponsive() },
+    get activeEngineWarning() { return activeEngineWarning() },
     forceStopConversation,
     wakeStuckTurn,
+    restartEngine,
     get engineNotice() { return s.engineNotice },
     get engineNoticeRepeat() { return s.engineNoticeRepeat },
     get busySend() { return s.busySend },

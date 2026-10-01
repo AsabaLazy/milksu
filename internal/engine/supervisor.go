@@ -120,51 +120,57 @@ type ApprovalJustification struct {
 }
 
 type Event struct {
-	SchemaVersion      int                      `json:"schemaVersion"`
-	Engine             string                   `json:"engine"`
-	SessionID          string                   `json:"sessionId,omitempty"`
-	Type               string                   `json:"type"`
-	Timestamp          string                   `json:"timestamp"`
-	Text               string                   `json:"text,omitempty"`
-	Bucket             string                   `json:"bucket,omitempty"`
-	Source             string                   `json:"source,omitempty"`
-	ToolName           string                   `json:"toolName,omitempty"`
-	ToolCallID         string                   `json:"toolCallId,omitempty"`
-	DurationMS         int64                    `json:"durationMs,omitempty"`
-	Error              string                   `json:"error,omitempty"`
-	Done               bool                     `json:"done,omitempty"`
-	Tools              []string                 `json:"tools,omitempty"`
-	Extensions         []string                 `json:"extensions,omitempty"`
-	Skills             []string                 `json:"skills,omitempty"`
-	ExecutionMode      string                   `json:"executionMode,omitempty"`
-	ApprovalPolicy     string                   `json:"approvalPolicy,omitempty"`
-	Capabilities       []CodingCapabilityStatus `json:"capabilities,omitempty"`
-	RequestID          string                   `json:"requestId,omitempty"`
-	Input              string                   `json:"input,omitempty"`
-	Reason             string                   `json:"reason,omitempty"`
-	Approved           *bool                    `json:"approved,omitempty"`
-	Grantable          bool                     `json:"grantable,omitempty"`
-	Justification      *ApprovalJustification   `json:"justification,omitempty"`
-	Notice             string                   `json:"notice,omitempty"`
-	NoticeEnglish      string                   `json:"noticeEnglish,omitempty"`
-	Choice             string                   `json:"choice,omitempty"`
-	BackgroundTasks    []BackgroundTask         `json:"backgroundTasks,omitempty"`
-	SubagentTasks      []SubagentTask           `json:"subagentTasks,omitempty"`
-	Jobs               []DshJob                 `json:"jobs,omitempty"`
-	Commands           []DshCommandDescriptor   `json:"commands,omitempty"`
-	PlanMode           *DshPlanMode             `json:"planMode,omitempty"`
-	Command            *DshCommandResult        `json:"command,omitempty"`
-	Goal               *CodingGoalState         `json:"goal,omitempty"`
-	Resumed            bool                     `json:"resumed,omitempty"`
-	Aborted            bool                     `json:"aborted,omitempty"`
-	Compaction         *CompactionResult        `json:"compaction,omitempty"`
-	Steering           []string                 `json:"steering,omitempty"`
-	FollowUp           []string                 `json:"followUp,omitempty"`
-	ModelSource        string                   `json:"modelSource,omitempty"`
-	Module             string                   `json:"module,omitempty"`
-	Usage              *ModelUsage              `json:"usage,omitempty"`
-	ContextComposition *ContextComposition      `json:"contextComposition,omitempty"`
-	ForkedSessionID    string                   `json:"forkedSessionId,omitempty"`
+	SchemaVersion   int                      `json:"schemaVersion"`
+	Engine          string                   `json:"engine"`
+	SessionID       string                   `json:"sessionId,omitempty"`
+	Type            string                   `json:"type"`
+	Timestamp       string                   `json:"timestamp"`
+	Text            string                   `json:"text,omitempty"`
+	Bucket          string                   `json:"bucket,omitempty"`
+	Source          string                   `json:"source,omitempty"`
+	ToolName        string                   `json:"toolName,omitempty"`
+	ToolCallID      string                   `json:"toolCallId,omitempty"`
+	DurationMS      int64                    `json:"durationMs,omitempty"`
+	Error           string                   `json:"error,omitempty"`
+	Done            bool                     `json:"done,omitempty"`
+	Tools           []string                 `json:"tools,omitempty"`
+	Extensions      []string                 `json:"extensions,omitempty"`
+	Skills          []string                 `json:"skills,omitempty"`
+	ExecutionMode   string                   `json:"executionMode,omitempty"`
+	ApprovalPolicy  string                   `json:"approvalPolicy,omitempty"`
+	Capabilities    []CodingCapabilityStatus `json:"capabilities,omitempty"`
+	RequestID       string                   `json:"requestId,omitempty"`
+	Input           string                   `json:"input,omitempty"`
+	Reason          string                   `json:"reason,omitempty"`
+	Approved        *bool                    `json:"approved,omitempty"`
+	Grantable       bool                     `json:"grantable,omitempty"`
+	Justification   *ApprovalJustification   `json:"justification,omitempty"`
+	Notice          string                   `json:"notice,omitempty"`
+	NoticeEnglish   string                   `json:"noticeEnglish,omitempty"`
+	Choice          string                   `json:"choice,omitempty"`
+	BackgroundTasks []BackgroundTask         `json:"backgroundTasks,omitempty"`
+	SubagentTasks   []SubagentTask           `json:"subagentTasks,omitempty"`
+	Jobs            []DshJob                 `json:"jobs,omitempty"`
+	Commands        []DshCommandDescriptor   `json:"commands,omitempty"`
+	PlanMode        *DshPlanMode             `json:"planMode,omitempty"`
+	Command         *DshCommandResult        `json:"command,omitempty"`
+	Goal            *CodingGoalState         `json:"goal,omitempty"`
+	Resumed         bool                     `json:"resumed,omitempty"`
+	Aborted         bool                     `json:"aborted,omitempty"`
+	// 预算软告警（turn.stall_warning）：sidecar 的首字节 / 断流预算到点，但还没硬掐。
+	// 渲染层的看门狗据此立刻举牌，而不必等它自己的静默阈值。
+	StallStage         string              `json:"stallStage,omitempty"`
+	StallKind          string              `json:"stallKind,omitempty"`
+	BudgetMs           int64               `json:"budgetMs,omitempty"`
+	PayloadBytes       int64               `json:"payloadBytes,omitempty"`
+	Compaction         *CompactionResult   `json:"compaction,omitempty"`
+	Steering           []string            `json:"steering,omitempty"`
+	FollowUp           []string            `json:"followUp,omitempty"`
+	ModelSource        string              `json:"modelSource,omitempty"`
+	Module             string              `json:"module,omitempty"`
+	Usage              *ModelUsage         `json:"usage,omitempty"`
+	ContextComposition *ContextComposition `json:"contextComposition,omitempty"`
+	ForkedSessionID    string              `json:"forkedSessionId,omitempty"`
 }
 
 // ModelUsage is the bounded, credential-free projection emitted by Pi after
@@ -384,56 +390,62 @@ type CodingCollaborationWorktree struct {
 }
 
 type bridgeEvent struct {
-	Type               string                   `json:"type"`
-	ID                 string                   `json:"id"`
-	Delta              string                   `json:"delta"`
-	Content            string                   `json:"content"`
-	Text               string                   `json:"text"`
-	Error              string                   `json:"error"`
-	ToolName           string                   `json:"toolName"`
-	ToolCallID         string                   `json:"toolCallId"`
-	DurationMS         int64                    `json:"durationMs"`
-	IsError            bool                     `json:"isError"`
-	Tools              []string                 `json:"tools"`
-	Extensions         []string                 `json:"extensions"`
-	Skills             []string                 `json:"skills"`
-	ExecutionMode      string                   `json:"executionMode"`
-	ApprovalPolicy     string                   `json:"approvalPolicy"`
-	Capabilities       []CodingCapabilityStatus `json:"capabilities"`
-	RequestID          string                   `json:"requestId"`
-	Action             string                   `json:"action"`
-	Input              string                   `json:"input"`
-	Reason             string                   `json:"reason"`
-	Approved           *bool                    `json:"approved"`
-	Grantable          bool                     `json:"grantable"`
-	Notice             string                   `json:"notice"`
-	NoticeEnglish      string                   `json:"noticeEnglish"`
-	Justification      *ApprovalJustification   `json:"justification"`
-	Choice             string                   `json:"choice"`
-	Tasks              []BackgroundTask         `json:"tasks"`
-	SubagentTasks      []SubagentTask           `json:"subagentTasks"`
-	Jobs               []DshJob                 `json:"jobs"`
-	Commands           []DshCommandDescriptor   `json:"commands"`
-	PlanMode           *DshPlanMode             `json:"planMode"`
-	Command            *DshCommandResult        `json:"command"`
-	Goal               *CodingGoalState         `json:"goal"`
-	Resumed            bool                     `json:"resumed"`
-	Aborted            bool                     `json:"aborted"`
-	Compaction         *CompactionResult        `json:"compaction"`
-	Steering           []string                 `json:"steering"`
-	FollowUp           []string                 `json:"followUp"`
-	Source             string                   `json:"source"`
-	From               string                   `json:"from"`
-	To                 string                   `json:"to"`
-	Module             string                   `json:"module"`
-	Usage              *ModelUsage              `json:"usage"`
-	ContextComposition *ContextComposition      `json:"contextComposition"`
-	ForkedSessionID    string                   `json:"forkedSessionId"`
-	Phase              string                   `json:"phase"`
-	UserText           string                   `json:"userText"`
-	AssistantText      string                   `json:"assistantText"`
-	RepeatLine         string                   `json:"repeatLine"`
-	Sample             []string                 `json:"sample"`
+	Type    string `json:"type"`
+	ID      string `json:"id"`
+	Delta   string `json:"delta"`
+	Content string `json:"content"`
+	Text    string `json:"text"`
+	// 预算软告警（turn.stall_warning）的载荷：阶段、种类、软阈值与请求体积。
+	StallStage     string                   `json:"stallStage"`
+	StallKind      string                   `json:"stallKind"`
+	BudgetMs       int64                    `json:"budgetMs"`
+	PayloadBytes   int64                    `json:"payloadBytes"`
+	Error          string                   `json:"error"`
+	ToolName       string                   `json:"toolName"`
+	ToolCallID     string                   `json:"toolCallId"`
+	DurationMS     int64                    `json:"durationMs"`
+	IsError        bool                     `json:"isError"`
+	Tools          []string                 `json:"tools"`
+	Extensions     []string                 `json:"extensions"`
+	Skills         []string                 `json:"skills"`
+	ExecutionMode  string                   `json:"executionMode"`
+	ApprovalPolicy string                   `json:"approvalPolicy"`
+	Capabilities   []CodingCapabilityStatus `json:"capabilities"`
+	RequestID      string                   `json:"requestId"`
+	Action         string                   `json:"action"`
+	Input          string                   `json:"input"`
+	Reason         string                   `json:"reason"`
+	Approved       *bool                    `json:"approved"`
+	Grantable      bool                     `json:"grantable"`
+	Notice         string                   `json:"notice"`
+	NoticeEnglish  string                   `json:"noticeEnglish"`
+
+	Justification      *ApprovalJustification `json:"justification"`
+	Choice             string                 `json:"choice"`
+	Tasks              []BackgroundTask       `json:"tasks"`
+	SubagentTasks      []SubagentTask         `json:"subagentTasks"`
+	Jobs               []DshJob               `json:"jobs"`
+	Commands           []DshCommandDescriptor `json:"commands"`
+	PlanMode           *DshPlanMode           `json:"planMode"`
+	Command            *DshCommandResult      `json:"command"`
+	Goal               *CodingGoalState       `json:"goal"`
+	Resumed            bool                   `json:"resumed"`
+	Aborted            bool                   `json:"aborted"`
+	Compaction         *CompactionResult      `json:"compaction"`
+	Steering           []string               `json:"steering"`
+	FollowUp           []string               `json:"followUp"`
+	Source             string                 `json:"source"`
+	From               string                 `json:"from"`
+	To                 string                 `json:"to"`
+	Module             string                 `json:"module"`
+	Usage              *ModelUsage            `json:"usage"`
+	ContextComposition *ContextComposition    `json:"contextComposition"`
+	ForkedSessionID    string                 `json:"forkedSessionId"`
+	Phase              string                 `json:"phase"`
+	UserText           string                 `json:"userText"`
+	AssistantText      string                 `json:"assistantText"`
+	RepeatLine         string                 `json:"repeatLine"`
+	Sample             []string               `json:"sample"`
 }
 
 // UserMemoryTurn is one ordinary-session signal for the shared user-memory
@@ -3847,6 +3859,17 @@ func normalizeBridgeEvent(raw bridgeEvent, kernels ...string) Event {
 		event.Type = "context.composition"
 	case "approval_requested":
 		event.Type = "approval.requested"
+	case "turn.heartbeat":
+		// 回合心跳：渲染层据此判定“卡住/仍在跑”。以前它被改成 engine.raw.turn.heartbeat ✗ ⇒ 永远收不到。
+		event.Type = "turn.heartbeat"
+	case "turn.stall_warning":
+		// 预算软告警：到点先告警、不判死，决定权交回读者。渲染层按这个名字分支 ⇒ 必须原样
+		// 透传并带上阶段与体积，否则它落到 default 变成 engine.raw.* ⇒ 永远不会举牌。
+		event.Type = "turn.stall_warning"
+		event.StallStage = raw.StallStage
+		event.StallKind = raw.StallKind
+		event.BudgetMs = raw.BudgetMs
+		event.PayloadBytes = raw.PayloadBytes
 	// Passed through verbatim: the renderer switches on these exact names, while the
 	// default arm would prefix them with engine.raw. and they could never match.
 	// guard.alarm is first emitted by the sidecar's thinking-repetition guard; the name
@@ -4250,4 +4273,98 @@ func projectRootContainsSidecar(root string) bool {
 		}
 	}
 	return true
+}
+
+// RestartEngine stops the Sidecar that serves this session so the next dispatch spawns a fresh
+// process. It is the reader's escape hatch for a Sidecar that no longer honours control commands:
+// abort_session is written into a process that has stopped reading stdin, so a retry queued behind
+// the stuck prompt never runs. The current turn is lost, which the renderer tells the reader before
+// wiring the button.
+//
+// Unlike InvalidateCredentials this is immediate (the wedged process is killed now, not retired on
+// the next dispatch) and it reports engine.restarted instead of engine.error, so an action the
+// reader asked for does not raise the failure banner. Every session the process served is settled,
+// not only the one that asked: one Sidecar is per (kernel, workspace), so its death interrupts the
+// whole workspace and the renderer must say so.
+func (s *Supervisor) RestartEngine(sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session id is required")
+	}
+	s.mu.Lock()
+	process := s.processForSessionLocked(sessionID)
+	if process == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	kernel := s.kernelForLocked(sessionID)
+	var interrupted []string
+	switch {
+	case s.processForKernelLocked(kernel) == process:
+		s.setKernelProcessLocked(kernel, nil)
+		interrupted = s.dropActiveSessionsLocked(kernel, process.workspace)
+	case s.parked != nil && s.parked[sidecarWorkspaceKey(kernel, process.workspace)] == process:
+		key := sidecarWorkspaceKey(kernel, process.workspace)
+		delete(s.parked, key)
+		delete(s.parkedAt, key)
+		interrupted = s.dropWorkspaceSessionsLocked(kernel, process.workspace)
+	default:
+		// The session is carried by a process already being retired, and that process may
+		// still be carrying other busy turns of the same workspace. The replacement sidecar
+		// never heard of those sessions, and once this process dies nothing else settles
+		// them, so every busy turn it carries has to be settled here or it stays busy
+		// forever (readEvents only settles sessions of a parked or current process).
+		interrupted = make([]string, 0, len(process.retiredTurns)+1)
+		for id := range process.retiredTurns {
+			if id == sessionID {
+				continue
+			}
+			if _, running := s.busySessions[id]; !running {
+				continue
+			}
+			interrupted = append(interrupted, id)
+			s.forgetSessionLocked(id)
+		}
+		s.forgetSessionLocked(sessionID)
+		interrupted = append(interrupted, sessionID)
+	}
+	// The session the reader asked about is settled no matter which branch resolved its
+	// process: a dispatch that fell back to a sidecar of another workspace would otherwise
+	// slip through the workspace filters above and stay busy forever.
+	found := false
+	for _, id := range interrupted {
+		if id == sessionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.forgetSessionLocked(sessionID)
+		interrupted = append(interrupted, sessionID)
+	}
+	process.retired.Store(true)
+	stopChildProcess(process)
+	s.mu.Unlock()
+	s.reportRestartedSessions(kernel, interrupted)
+	return nil
+}
+
+// reportRestartedSessions tells each session the Sidecar went away because the reader asked for a
+// restart. It emits from a goroutine for the same reason reportInterruptedSessions does: the caller
+// holds the Supervisor lock while the emit callback reaches application code.
+func (s *Supervisor) reportRestartedSessions(kernel string, sessions []string) {
+	if len(sessions) == 0 {
+		return
+	}
+	ids := append([]string(nil), sessions...)
+	go func() {
+		for _, id := range ids {
+			s.emitEvent(Event{
+				Engine:    kernel,
+				SessionID: id,
+				Type:      "engine.restarted",
+				Done:      true,
+			})
+		}
+	}()
 }

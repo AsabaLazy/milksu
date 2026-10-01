@@ -12,11 +12,14 @@ const runtimeStub = {
   pendingWorkspaceHome: null as unknown,
   forceStopConversation: vi.fn(),
   wakeStuckTurn: vi.fn(async () => true),
+  restartEngine: vi.fn(async () => true),
   notifyTurnStall: vi.fn(),
   toggleDshPlanMode: () => undefined,
   streamStaleSeconds: 0,
   streamStale: false,
   activeStallKind: '' as '' | 'engine-gone' | 'model-stalled',
+  activeEngineUnresponsive: false,
+  activeEngineWarning: null as null | { at: number; stage: string; budgetMs: number; payloadBytes: number },
   store: { subscribe: () => () => undefined, getSnapshot: () => ({}) },
   setMultitask: () => undefined,
   selectedMultitask: false,
@@ -135,12 +138,15 @@ beforeEach(() => {
   else if (typeof CSS.escape !== 'function') (CSS as unknown as Record<string, unknown>).escape = (value: string) => value
   runtimeStub.forceStopConversation.mockClear()
   runtimeStub.wakeStuckTurn.mockClear()
+  runtimeStub.restartEngine.mockClear()
   runtimeStub.notifyTurnStall.mockClear()
   runtimeStub.streamStale = true
   runtimeStub.streamStaleSeconds = 130
   runtimeStub.activeStallKind = 'model-stalled'
   runtimeStub.activeToolRunning = false
   runtimeStub.activeQueuedBehind = null
+  runtimeStub.activeEngineUnresponsive = false
+  runtimeStub.activeEngineWarning = null
 })
 
 afterEach(() => {
@@ -214,5 +220,29 @@ describe('ChatPage 停滞看门狗呈现', () => {
     runtimeStub.activeToolRunning = true
     await renderChatPage()
     expect(runtimeStub.notifyTurnStall).not.toHaveBeenCalled()
+  })
+
+  it('预算软告警时把「为什么算停滞」换成预算与体积，而不是笼统的「停滞」', async () => {
+    runtimeStub.activeEngineWarning = { at: 0, stage: 'ttfb', budgetMs: 17_900, payloadBytes: 3_313_500 }
+    const { host } = await renderChatPage()
+    const banner = host.querySelector('[data-testid="stream-stale"]')
+    expect(banner?.textContent).toContain('超过等待预算')
+    expect(banner?.textContent).toContain('3.2MB')
+  })
+
+  it('sidecar 不响应 abort 时给出「重启引擎」，且只有读者点了才动', async () => {
+    runtimeStub.activeEngineUnresponsive = true
+    const { host } = await renderChatPage()
+    // 没有暂停/自动重启：只有按钮存在，重启函数未被调用。
+    expect(runtimeStub.restartEngine).not.toHaveBeenCalled()
+    const restart = clickButton(host, 'restart-engine')
+    await act(async () => { restart.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(runtimeStub.restartEngine).toHaveBeenCalledWith('stalled-conversation')
+  })
+
+  it('sidecar 还在响应 abort 时不显示「重启引擎」', async () => {
+    runtimeStub.activeEngineUnresponsive = false
+    const { host } = await renderChatPage()
+    expect(host.querySelector('[data-testid="restart-engine"]')).toBeNull()
   })
 })

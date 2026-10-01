@@ -131,4 +131,25 @@ describe('useConversations 停滞通知', () => {
     conversations.notifyTurnStall({ conversationId: '', stallKind: 'model-stalled', quietMs: 1 })
     expect(invoke).not.toHaveBeenCalled()
   })
+
+  it('sidecar 的预算软告警（turn.stall_warning）让看门狗立刻举牌，并存下告警详情', async () => {
+    const conversations = await runtimeWithStalledTurn()
+    // 心跳在：引擎进程还活着，只是请求超过了它自己的预算。
+    emit('conversation-1', { type: 'turn.heartbeat' })
+    emit('conversation-1', {
+      type: 'turn.stall_warning',
+      stallStage: 'ttfb',
+      budgetMs: 17_900,
+      payloadBytes: 3_313_500,
+    })
+    // 还没到任何本地静默阈值，但告警本身就是权威信号。
+    expect(conversations.activeStallKind).toBe('model-stalled')
+    expect(conversations.activeEngineWarning?.budgetMs).toBe(17_900)
+    expect(conversations.activeEngineWarning?.payloadBytes).toBe(3_313_500)
+
+    // 真实事件到来 ⇒ 告警过期，停滞判定回落。
+    emit('conversation-1', { type: 'assistant.started' })
+    expect(conversations.activeStallKind).toBe('')
+    expect(conversations.activeEngineWarning).toBeNull()
+  })
 })

@@ -380,6 +380,7 @@ interface DesktopAppBindings {
   HandoffCodingSession(conversationId: string, kernel?: string): Promise<CodingSessionHandoffResult>
   AbortMessage(conversationId: string): Promise<void>
   AbortSubagent(conversationId: string, subagentId: string): Promise<void>
+  RestartEngine(conversationId: string): Promise<void>
   RespondToolApproval(
     conversationId: string,
     requestId: string,
@@ -995,6 +996,8 @@ export async function invokeCommand<T = unknown>(command: string, args?: Command
           args?.conversationId as string,
           (args?.kernel as string) ?? '',
         ) as Promise<T>
+      case 'restart_engine':
+        return app.RestartEngine(args?.conversationId as string) as Promise<T>
       case 'abort_message':
         return (args?.subagentId
           ? app.AbortSubagent(args.conversationId as string, args.subagentId as string)

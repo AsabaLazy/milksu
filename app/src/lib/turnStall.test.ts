@@ -73,4 +73,22 @@ describe('decideTurnStall', () => {
   it('never reports a queued conversation as stalled', () => {
     expect(decideTurnStall({ ...base, queuedBehind: true, quietMs: 3_600_000 })).toBe('')
   })
+
+  it('trusts the sidecar budget warning immediately, before the local quiet clock', () => {
+    // sidecar 只在请求真的超过它按体积算出的预算时才发告警 ⇒ 不必再等本地静默阈值。
+    expect(decideTurnStall({ ...base, engineAlive: true, engineWarned: true, quietMs: 0 })).toBe('model-stalled')
+    expect(decideTurnStall({ ...base, engineAlive: true, engineWarned: true, hasEvent: false })).toBe('model-stalled')
+  })
+
+  it('does not call a warned request model-stalled once the heartbeat is gone', () => {
+    // 心跳已停时不能说「引擎进程还在」；走 engine-gone 的判定路径。
+    expect(decideTurnStall({ ...base, engineAlive: false, engineWarned: true, quietMs: 0 })).toBe('')
+    expect(decideTurnStall({ ...base, engineAlive: false, engineWarned: true, quietMs: 45_000 })).toBe('engine-gone')
+  })
+
+  it('keeps the tool and queue guards ahead of the budget warning', () => {
+    expect(decideTurnStall({ ...base, engineAlive: true, engineWarned: true, toolRunning: true })).toBe('')
+    expect(decideTurnStall({ ...base, engineAlive: true, engineWarned: true, queuedBehind: true })).toBe('')
+    expect(decideTurnStall({ ...base, engineAlive: true, engineWarned: true, running: false })).toBe('')
+  })
 })

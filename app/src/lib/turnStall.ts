@@ -60,8 +60,12 @@ export type TurnStallKind = '' | 'engine-gone' | 'model-stalled'
 
 /**
  * 纯函数判定，方便直接测：
- * - 不在跑、从没有过事件、安静没到门槛 ⇒ 空串；
+ * - 不在跑 ⇒ 空串；
  * - 有工具在跑 / 在排队 ⇒ 空串（误伤防护，由调用方算好这两个布尔传进来）；
+ * - 引擎自己报了预算告警（`engineWarned`）且心跳还在 ⇒ model-stalled，不等静默门槛：
+ *   sidecar 只在请求真的超过它按体积算出的预算时才报警，这比本地计时器更权威；
+ *   心跳已停则仍走 engine-gone，不能说「进程还在」；
+ * - 从没有过事件、安静没到门槛 ⇒ 空串；
  * - 心跳已停且静默 ≥ engineGoneMs ⇒ engine-gone；
  * - 心跳还在且静默 ≥ modelStallMs ⇒ model-stalled；
  * - 其余（安静但没到停滞门槛）⇒ 空串（界面只说「等待中」）。
@@ -71,14 +75,18 @@ export function decideTurnStall(input: {
   toolRunning: boolean
   queuedBehind: boolean
   engineAlive: boolean
+  /** sidecar 的 turn.stall_warning 还没被新事件清掉：请求已超过它自己的预算。 */
+  engineWarned?: boolean
   /** 距最后一次引擎事件的毫秒数；从未有过事件时为 0，调用方需用 hasEvent 区分。 */
   quietMs: number
   hasEvent: boolean
   config?: TurnStallConfig
 }): TurnStallKind {
   const config = input.config ?? TURN_STALL_DEFAULTS
-  if (!input.running || !input.hasEvent) return ''
+  if (!input.running) return ''
   if (input.toolRunning || input.queuedBehind) return ''
+  if (input.engineWarned && input.engineAlive) return 'model-stalled'
+  if (!input.hasEvent) return ''
   if (input.quietMs < config.quietMs) return ''
   if (input.engineAlive) {
     return input.quietMs >= config.modelStallMs ? 'model-stalled' : ''

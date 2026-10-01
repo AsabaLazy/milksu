@@ -74,13 +74,16 @@ async function drain(runtime, payloadBytes) {
   return events;
 }
 
-test("a small request with a slow first byte is killed by the first-byte budget", async () => {
+test("a small request with a slow first byte warns first, then dies after the grace", async () => {
   const { server, port } = await startFakeServer({ headersDelayMs: 1500 });
   try {
     const runtime = fakeRuntime(port, 64 * 1024);
+    const warnings = [];
     assert.equal(applyRequestBudgetToRuntime(runtime, {
-      thresholds: { ttfbBaseMs: 300, ttfbPerMbMs: 0, ttfbMaxMs: 5000, stallMs: 2000 },
+      // 软预算 300ms；宽限 200ms ⇒ 500ms 判死，早于服务器 1.5s 的首字节。
+      thresholds: { ttfbBaseMs: 300, ttfbPerMbMs: 0, ttfbMaxMs: 5000, stallMs: 2000, killGraceMs: 200, killMaxMs: 60_000 },
       estimateBytes: () => 64 * 1024,
+      onWarn: warning => warnings.push(warning),
     }), true);
     const events = await drain(runtime);
     const error = events.at(-1);
@@ -88,6 +91,30 @@ test("a small request with a slow first byte is killed by the first-byte budget"
     assert.equal(error.error.stopReason, "error");
     assert.match(error.error.errorMessage, /before the first byte/);
     assert.match(error.error.errorMessage, /timed out/);
+    // 判死之前必须已经告警过，读者才有机会举牌。
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].kind, "ttfb");
+  } finally {
+    server.close();
+  }
+});
+
+test("a first byte inside the grace is allowed through even after the warning", async () => {
+  const { server, port } = await startFakeServer({ headersDelayMs: 1000 });
+  try {
+    const runtime = fakeRuntime(port, 64 * 1024);
+    const warnings = [];
+    applyRequestBudgetToRuntime(runtime, {
+      // 软预算 300ms，宽限 3s ⇒ 1.0s 的首字节虽然超过软预算，仍在宽限内，应当放行。
+      thresholds: { ttfbBaseMs: 300, ttfbPerMbMs: 0, ttfbMaxMs: 5000, stallMs: 2000, killGraceMs: 3000, killMaxMs: 60_000 },
+      estimateBytes: () => 64 * 1024,
+      onWarn: warning => warnings.push(warning),
+    });
+    const events = await drain(runtime);
+    assert.equal(events.some(event => event.type === "error"), false);
+    assert.equal(events.at(-1).type, "done");
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0].stage, "ttfb");
   } finally {
     server.close();
   }
@@ -115,7 +142,8 @@ test("a stream that goes silent after the first byte is killed by stall detectio
   try {
     const runtime = fakeRuntime(port, 64 * 1024);
     applyRequestBudgetToRuntime(runtime, {
-      thresholds: { ttfbBaseMs: 2000, ttfbPerMbMs: 0, ttfbMaxMs: 5000, stallMs: 300 },
+      // 断流软阈值 300ms；宽限 300ms ⇒ 600ms 判死，早于服务器的 1.5s 收尾。
+      thresholds: { ttfbBaseMs: 2000, ttfbPerMbMs: 0, ttfbMaxMs: 5000, stallMs: 300, killGraceMs: 300, killMaxMs: 60_000 },
       estimateBytes: () => 64 * 1024,
     });
     const events = await drain(runtime);
