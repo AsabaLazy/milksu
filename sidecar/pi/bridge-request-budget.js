@@ -13,11 +13,15 @@
  * 阈值集中在这一处，可用环境变量覆盖，便于真机标定与测试。
  */
 
-/** 4MB ≈ 8.3s 是 2026-09-29 的参考点：每 MB 再加 2.5s，4MB 就有 ~20s 首字节预算。 */
+/**
+ * 参考点（2026-10-01）：DeepSeek 上一个 2.78MB 的请求首字节超过 16.9s 才回来。
+ * 「4MB ≈ 8.3s」（2026-09-29）那种标定太乐观——服务商有慢日子，余量得留足。
+ * 现在 base 20s、每 MB 再加 10s：2.78MB ≈ 48s，4MB = 60s，封顶 300s。
+ */
 export const DEFAULT_REQUEST_BUDGET = Object.freeze({
-  ttfbBaseMs: 10_000,
-  ttfbPerMbMs: 2_500,
-  ttfbMaxMs: 120_000,
+  ttfbBaseMs: 20_000,
+  ttfbPerMbMs: 10_000,
+  ttfbMaxMs: 300_000,
   stallMs: 30_000,
 });
 

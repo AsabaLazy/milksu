@@ -41,16 +41,19 @@ function fakeTimers() {
   };
 }
 
-test("defaults give a 10s base that grows 2.5s per MB and caps at 120s", () => {
+test("defaults give a 20s base that grows 10s per MB and caps at 300s", () => {
   const small = resolveRequestBudget({ payloadBytes: 0 });
-  assert.equal(small.ttfbMs, 10_000);
+  assert.equal(small.ttfbMs, 20_000);
   assert.equal(small.stallMs, 30_000);
 
   const fourMb = resolveRequestBudget({ payloadBytes: 4 * 1024 * 1024 });
-  assert.equal(fourMb.ttfbMs, 20_000);
+  assert.equal(fourMb.ttfbMs, 60_000);
 
-  // 4MB ≈ 8.3s of real first-byte latency must fit comfortably inside the budget.
-  assert.ok(fourMb.ttfbMs > 8_300);
+  // 2026-10-01 教训：DeepSeek 上 2.78MB 请求首字节超过 16.9s 才回来，
+  // 预算必须留得下这种慢日子（2.78MB ⇒ ~48s）。
+  const slowDay = resolveRequestBudget({ payloadBytes: 2.78 * 1024 * 1024 });
+  assert.equal(slowDay.ttfbMs, 47_800);
+  assert.ok(slowDay.ttfbMs > 16_900, `2.78MB budget ${slowDay.ttfbMs}ms must cover the 16.9s slow day`);
 
   const huge = resolveRequestBudget({ payloadBytes: 512 * 1024 * 1024 });
   assert.equal(huge.ttfbMs, DEFAULT_REQUEST_BUDGET.ttfbMaxMs);
@@ -89,16 +92,16 @@ test("the ttfb alarm fires before the first byte and aborts with a readable budg
   const timers = fakeTimers();
   const guard = createRequestBudgetGuard({ payloadBytes: 4 * 1024 * 1024, timerApi: timers.api });
 
-  assert.deepEqual(timers.delays(), [20_000]);
+  assert.deepEqual(timers.delays(), [60_000]);
   assert.equal(guard.stage, "ttfb");
   assert.equal(guard.signal.aborted, false);
 
-  assert.equal(timers.fire(20_000), true);
+  assert.equal(timers.fire(60_000), true);
   assert.equal(guard.signal.aborted, true);
   const error = guard.timeoutError();
   assert.ok(error instanceof RequestBudgetError);
   assert.equal(error.kind, "ttfb");
-  assert.equal(error.budgetMs, 20_000);
+  assert.equal(error.budgetMs, 60_000);
   assert.match(error.message, /before the first byte/);
   assert.match(error.message, /timed out/);
   guard.stop();
@@ -108,7 +111,7 @@ test("the ttfb alarm fires before the first byte and aborts with a readable budg
 test("the first byte switches to stall detection, and each event resets it", () => {
   const timers = fakeTimers();
   const guard = createRequestBudgetGuard({ payloadBytes: 0, timerApi: timers.api });
-  assert.deepEqual(timers.delays(), [10_000]);
+  assert.deepEqual(timers.delays(), [20_000]);
 
   guard.note();
   assert.equal(guard.stage, "stream");
@@ -132,7 +135,7 @@ test("a stream that never starts is a ttfb death, not a stall death", () => {
   const guard = createRequestBudgetGuard({ payloadBytes: 0, timerApi: timers.api });
   guard.note();
   // Only the stall timer survives; firing it must not claim a ttfb death.
-  assert.equal(timers.fire(10_000), false);
+  assert.equal(timers.fire(20_000), false);
   assert.equal(timers.fire(30_000), true);
   assert.equal(guard.timeoutError()?.kind, "stall");
   guard.stop();
