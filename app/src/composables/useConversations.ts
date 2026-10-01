@@ -93,7 +93,9 @@ import {
   defaultTaskNotifySwitch,
   isAlreadySameProblem,
   notifyTaskIfNeeded,
+  planBackgroundTaskNotify,
   planProblemNotify,
+  shouldNotifySettledBackgroundTask,
   turnStallNotifySummary,
 } from '@/lib/taskNotifyBridge'
 import { MODEL_THINKING_LEVELS } from '@/lib/modelThinking'
@@ -1546,12 +1548,17 @@ export function createConversationsRuntime(options?: {
     backgroundTaskRefreshTimer = setInterval(runRefresh, BACKGROUND_TASK_REFRESH_MS)
   }
 
+  /** 已通知过的后台任务终态（键含 at ⇒ 同一次终态重放不发 ✓，新一轮终态是新键 ⇒ 会再发 ✓）。*/
+  const notifiedSettledOutcomes = new Set<string>()
+
   function markBackgroundTaskSettled(input: {
     sessionId: string
     tasks: { id: string; name: string; status: string }[]
     settled: BackgroundTaskOutcome | null
   }) {
     const { sessionId, tasks, settled } = input
+    // 通知判据里的**状态**：写之前先看"在跑集合是否非空"（两条调用路径算的 hadRunning 与此同源 ✓）。
+    const hadRunning = (store.getState().backgroundTasks[sessionId] ?? []).length > 0
     store.setState(state => ({
       ...state,
       backgroundTasks: { ...state.backgroundTasks, [sessionId]: tasks },
@@ -1559,6 +1566,41 @@ export function createConversationsRuntime(options?: {
         ? { backgroundTaskOutcome: { ...state.backgroundTaskOutcome, [sessionId]: settled } }
         : {}),
     }))
+    // 通知在 **reducer 之外**：settled 非空 且 写之前确实有在跑任务 ⇒ "刚从非空变空"才发。
+    // 口径：只有**失败**发（成功/被取消在 planBackgroundTaskNotify 里拦下），走 failed 开关。
+    if (!shouldNotifySettledBackgroundTask({ settled, hadRunning })) return
+    const plan = planBackgroundTaskNotify({ conversationId: sessionId, outcome: settled, seen: notifiedSettledOutcomes })
+    if (!plan.notify || !plan.backgroundTask) { notifiedSettledOutcomes.add(plan.key); return }
+    notifiedSettledOutcomes.add(plan.key)
+    const notifyTitle = s.conversations.find(item => item.id === sessionId)?.title ?? ''
+    notifyTaskIfNeeded(
+      {
+        conversation: { id: sessionId, title: notifyTitle },
+        backgroundTask: plan.backgroundTask,
+        enabled: taskNotifySource?.() ?? defaultTaskNotifySwitch(),
+      },
+      {
+        invoke: (method, args) => (
+          window as unknown as {
+            milksu?: { invoke?: (method: string, args: Record<string, unknown>) => unknown }
+          }
+        ).milksu?.invoke?.(method, args),
+        // 与本次终态去重键里的 at 同源 ⇒ 外壳键与渲染层键一致（重复投递不会被放行）。
+        summary: backgroundTaskNotifySummary(settled),
+        turnKey: Number(settled?.at) || 0,
+      },
+    )
+  }
+
+  /** 后台任务的通知正文：带上任务名，且与"任务被异常终止"/"任务已完成"区分开。
+   *  目前只有**失败**会走到这里（成功不发是读者口径）。 */
+  function backgroundTaskNotifySummary(outcome: { firstName?: string, count?: number, failedCount?: number } | null): string {
+    const name = String(outcome?.firstName ?? '').trim()
+    const failedCount = Number(outcome?.failedCount) || 0
+    if (!name) return t('后台任务失败', 'Background task failed')
+    // 只按**失败个数**措辞：一个失败就只报名字（拿一批的总数当"失败几个"会误导 ✗）。
+    if (failedCount > 1) return t(`后台任务失败：${name} 等 ${failedCount} 个`, `Background tasks failed: ${name} and ${failedCount - 1} more`)
+    return t(`后台任务失败：${name}`, `Background task failed: ${name}`)
   }
   const compactionErrorTimers = new Map<string, ReturnType<typeof setTimeout>>()
 

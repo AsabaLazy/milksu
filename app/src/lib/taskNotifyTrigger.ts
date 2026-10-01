@@ -30,6 +30,8 @@ export interface TaskNotifySwitch {
 
 export interface TaskNotifyInput {
   turn?: 'completed' | 'failed'
+  /** 后台任务终态：只有 **失败** 会走到这里（成功/被取消不发是读者口径），仍走 failed 开关。 */
+  backgroundTask?: 'completed' | 'failed' | undefined
   needsDecision?: boolean
   /** 停滞看门狗在**进入停滞的边沿**显式点名这一类（不走 needsDecision）。 */
   stalled?: boolean
@@ -58,8 +60,8 @@ export function decideTaskNotify(input: TaskNotifyInput): TaskNotifyDecision {
   }
   const needsDecision = input?.needsDecision === true
   const stalled = input?.stalled === true
-  const failedSignal = turn === 'failed'
-  const completedSignal = turn === 'completed'
+  const failedSignal = turn === 'failed' || input?.backgroundTask === 'failed'
+  const completedSignal = turn === 'completed' || input?.backgroundTask === 'completed'
   // 顺序就是优先级：先最急的，再次急的。停滞是系统告警，排在最前。
   let kind: TaskNotifyKind | undefined
   if (stalled) kind = 'stalled'

@@ -67,6 +67,8 @@ export function taskNotifySwitchFromSettings(
 export interface TaskNotifySnapshot {
   /** 回合终态：completed / failed。 */
   turn?: TaskNotifyInput['turn']
+  /** 后台任务终态：只传**失败**（成功/被取消在规划层就拦下了，不会到这里）。 */
+  backgroundTask?: TaskNotifyInput['backgroundTask']
   conversation: TaskNotifyConversation
   enabled: TaskNotifySwitch
   /**
@@ -102,6 +104,7 @@ export function planTaskNotify(snapshot: TaskNotifySnapshot): TaskNotifyPlan {
   const conversation = snapshot?.conversation
   const decision = decideTaskNotify({
     turn: snapshot?.turn,
+    backgroundTask: snapshot?.backgroundTask,
     needsDecision: snapshot?.terminalEvent === true
       ? false
       : snapshot?.needsDecision === true || conversationNeedsDecision(conversation?.messages),
@@ -211,6 +214,44 @@ export function notifyTaskIfNeeded(snapshot: TaskNotifySnapshot, deps: TaskNotif
   if (turnKey) args.turnKey = turnKey
   deps?.invoke?.('NotifyTask', args)
   return plan.decision
+}
+
+export type BackgroundOutcomeKind = 'failed' | 'cancelled' | 'completed'
+
+/**
+ * 后台任务终态的通知规划（纯函数 ✓）。
+ * - 终态那一刻传进来的任务列表**已经是空的** ⇒ **拿不到 taskId** ✗ ⇒ 去重键用
+ *   `${conversationId}:${kind}:${at}` ✓（at 来自本次终态时刻 ⇒ 同一次终态重放不发 ✓，
+ *   而"用户再跑一次又失败"是新的一次终态、新 at ⇒ **会再发** ✓）。
+ * - `cancelled`（读者主动取消）**不发** ✗ —— 与主动停止一个口径：主动停不算失败。
+ * - `completed`（正常跑完）**也不发** ✗ —— 读者口径（2026-09-27 真机验收时定）：
+ *   后台任务成功不需要打扰（界面下方的任务条已经能看到情况），只有**失败**才值得弹。
+ *   失败仍走 `failed` 开关（语义也对：失败就是失败）。
+ */
+export function planBackgroundTaskNotify(input: {
+  conversationId: string
+  outcome?: { kind: BackgroundOutcomeKind; at: number } | null
+  seen?: { has(key: string): boolean }
+}): { notify: boolean; key: string; backgroundTask?: 'failed' | 'completed' } {
+  const outcome = input?.outcome
+  if (!outcome) return { notify: false, key: '' }
+  const kind = outcome.kind
+  const key = `${String(input?.conversationId ?? '')}:${kind}:${Number(outcome.at) || 0}`
+  if (input?.seen?.has(key)) return { notify: false, key }
+  if (kind === 'cancelled') return { notify: false, key }
+  if (kind === 'completed') return { notify: false, key }
+  return { notify: true, key, backgroundTask: 'failed' }
+}
+
+/**
+ * "只发一次"由**状态**保证（不靠时间戳 ✗）：终态形成时"在跑集合必须刚从非空变空"。
+ * 第二次调用（重放，或将来上游让两条路径都算出非 null）读到的都已是清空集合 ⇒ hadRunning=false ⇒ 不发。
+ */
+export function shouldNotifySettledBackgroundTask(input: {
+  settled?: { kind: BackgroundOutcomeKind; at: number } | null
+  hadRunning: boolean
+}): boolean {
+  return Boolean(input?.settled) && input?.hadRunning === true
 }
 
 /** 会被通知的问题来源白名单 —— **只在这一处改**。

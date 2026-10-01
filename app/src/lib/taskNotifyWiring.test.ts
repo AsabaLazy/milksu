@@ -9,8 +9,10 @@ import {
   defaultTaskNotifySwitch,
   isAlreadySameProblem,
   notifyTaskIfNeeded,
+  planBackgroundTaskNotify,
   planProblemNotify,
   planTaskNotify,
+  shouldNotifySettledBackgroundTask,
   wireKindFor,
 } from './taskNotifyBridge'
 import { applyUiLocale } from './uiLocale'
@@ -41,17 +43,28 @@ const stripLineComments = (text: string) =>
 const useConversationsCode = stripLineComments(useConversationsSource)
 
 describe('通知文案必须两两不同（真机反馈：共用一句会误导）', () => {
-  it('任务被异常终止 / 任务已完成 两句不重复', () => {
+  it('任务被异常终止 / 后台任务失败 / 任务已完成 三句不重复', () => {
     const pick = (re: RegExp) => useConversationsCode.match(re)?.[1]?.trim() ?? ''
     const runFailed = pick(/summary: t\('([^']*任务被异常终止[^']*)'/) || pick(/summary: t\('([^']+)', 'Task terminated unexpectedly'\)/)
     const turnDone = pick(/summary: t\('([^']+)', 'Task finished'\)/)
-    for (const [name, value] of Object.entries({ runFailed, turnDone })) {
+    const background = pick(/return t\(`([^`]*后台任务失败[^`]*)`/)
+    for (const [name, value] of Object.entries({ runFailed, turnDone, background })) {
       expect(value, `${name} 的文案应存在`).not.toBe('')
     }
-    const all = [runFailed, turnDone]
-    expect(new Set(all).size, `两句必须不同，实际: ${JSON.stringify(all)}`).toBe(2)
-    // 用户 2026-09-28 拍板：回合完成就写“任务已完成”。
+    const all = [runFailed, turnDone, background]
+    expect(new Set(all).size, `三句必须两两不同，实际: ${JSON.stringify(all)}`).toBe(3)
+    // 用户 2026-09-28 拍板：回合完成就写“任务已完成”（后台任务那句已带任务名，不再撞车）。
     expect(turnDone).toBe('任务已完成')
+  })
+
+  it('后台任务的通知正文带任务名（不是一句通用话术）', () => {
+    expect(useConversationsCode).toMatch(/summary: backgroundTaskNotifySummary\(settled\)/)
+    const fn = useConversationsCode.match(/function backgroundTaskNotifySummary[\s\S]{0,600}?\n  \}/)?.[0] ?? ''
+    expect(fn).toContain('firstName')
+    expect(fn).toContain('后台任务失败')
+    // 真机截图：一批 11 个里只有 1 个失败，却写成“共 11 个”✗ ⇒ 只能用失败个数措辞。
+    expect(fn).toContain('failedCount')
+    expect(fn).not.toContain('（共 ')
   })
 })
 
@@ -166,6 +179,13 @@ describe('发出去的 kind 必须在外壳白名单里（契约对齐；真机�
       )
       expect(SHELL_NOTIFY_KINDS).toContain(seen[0]?.kind as string)
     }
+    // 后台任务失败走的也是同一条发送路径 ⇒ kind 也必须在白名单里
+    const bg: Array<Record<string, unknown>> = []
+    notifyTaskIfNeeded(
+      { backgroundTask: 'failed', terminalEvent: true, conversation: { id: 'c', title: 'A' }, enabled: { needsInput: true, failed: true, completed: true } },
+      { invoke: (_m, args) => bg.push(args) },
+    )
+    expect(SHELL_NOTIFY_KINDS).toContain(bg[0]?.kind as string)
   })
 })
 
@@ -197,9 +217,9 @@ describe('设置值 ⇒ enabled（读取函数现读）', () => {
 describe('接线源码守卫（不写组件 class/文案断言）', () => {
   it('调用点现读设置（不用快照）+ 默认函数，且旧的硬编码已消失；来源可注入', () => {
     // 计数断言，不用 toMatch（只要存在就通过 ⇒ 注掉其中一处仍然绿 ✗ 假守卫）：
-    //   三处都必须现读：① 审批卡到达 ② 终态事件统一发送器 notifyTerminalTurn
-    //   ③ 停滞看门狗 notifyTurnStall
-    expect(useConversationsCode.match(/enabled: taskNotifySource\?\.\(\) \?\? defaultTaskNotifySwitch\(\)/g)?.length).toBe(3)
+    //   四处都必须现读：① 审批卡到达 ② 后台任务终态（markBackgroundTaskSettled 内）
+    //   ③ 终态事件统一发送器 notifyTerminalTurn ④ 停滞看门狗 notifyTurnStall
+    expect(useConversationsCode.match(/enabled: taskNotifySource\?\.\(\) \?\? defaultTaskNotifySwitch\(\)/g)?.length).toBe(4)
     expect(useConversationsCode).not.toMatch(/needsInput: true, failed: false, completed: false/)
     expect(useConversationsCode).toMatch(/let taskNotifySource/)
     expect(useConversationsCode).toMatch(/setTaskNotifySource: \(source\?/)
@@ -257,7 +277,9 @@ describe('事件标识（turnKey）与渲染层去重键同源', () => {
     expect(seen[1] && 'turnKey' in seen[1]).toBe(false)
   })
 
-  it('渲染层传的 turnKey 与自己去重键里的 at 同源（两类各看一处）', () => {
+  it('渲染层传的 turnKey 与自己去重键里的 at 同源（三类各看一处）', () => {
+    // 后台任务：key 用 outcome.at，args 也用同一个 at
+    expect(useConversationsCode).toMatch(/turnKey: Number\(settled\?\.at\) \|\| 0/)
     // 失败：统一发送器用 input.at，而 input.at 就是各自 key 里的 at
     expect(useConversationsCode).toMatch(/turnKey: input\.at/)
     expect(useConversationsCode).toMatch(/key: plan\.key/) // 失败类：键与 at 同一次计算
@@ -287,6 +309,72 @@ describe('触发源挂点守卫（每类各一处 + 位置正确）', () => {
     expect(start).toBeGreaterThan(-1)
     const guardBlock = useConversationsCode.slice(start, start + 900)
     expect(guardBlock).not.toMatch(/notify(TaskIfNeeded|RunFailure|StoppedTurn|TerminalTurn)\(/)
+  })
+})
+
+describe('后台任务终态：去重与边界（纯函数）', () => {
+  it('同一次终态重放（同 key）⇒ 不发', () => {
+    const outcome = { kind: 'failed' as const, at: 1000 }
+    const seen = new Set<string>(['c:failed:1000'])
+    expect(planBackgroundTaskNotify({ conversationId: 'c', outcome, seen }).notify).toBe(false)
+  })
+
+  it('新一轮终态（新 at）⇒ 必须再发（不许被"这个会话曾失败过"永久静音）', () => {
+    const seen = new Set<string>(['c:failed:1000'])
+    expect(planBackgroundTaskNotify({ conversationId: 'c', outcome: { kind: 'failed', at: 2000 }, seen }).notify).toBe(true)
+  })
+
+  it('失败 ⇒ 发（走 failed）；成功完成 ⇒ 不发；被取消 ⇒ 不发', () => {
+    expect(planBackgroundTaskNotify({ conversationId: 'c', outcome: { kind: 'failed', at: 1 } }).backgroundTask).toBe('failed')
+    // 读者口径：成功不打扰（界面上任务条能看到）；只有失败值得弹通知
+    expect(planBackgroundTaskNotify({ conversationId: 'c', outcome: { kind: 'completed', at: 2 } }).notify).toBe(false)
+    expect(planBackgroundTaskNotify({ conversationId: 'c', outcome: { kind: 'cancelled', at: 3 } }).notify).toBe(false)
+  })
+
+  it('没有终态 ⇒ 不发', () => {
+    expect(planBackgroundTaskNotify({ conversationId: 'c', outcome: null }).notify).toBe(false)
+  })
+})
+
+describe('后台任务接线守卫（只挂一处 + 在 reducer 之外）', () => {
+  it('收口函数里：setState 之后才判 settled，且通知只有一处', () => {
+    const start = useConversationsCode.indexOf('function markBackgroundTaskSettled')
+    expect(start).toBeGreaterThan(-1)
+    const body = useConversationsCode.slice(start, useConversationsCode.indexOf('function backgroundTaskNotifySummary'))
+    const setStateAt = body.indexOf('store.setState')
+    const notifyAt = body.indexOf('notifyTaskIfNeeded(')
+    expect(setStateAt).toBeGreaterThan(-1)
+    expect(notifyAt).toBeGreaterThan(setStateAt)          // 通知在 setState **之后**（reducer 之外 ✓）
+    // 判据是**状态**（settled + 写前 hadRunning），不是"setState 是否发生" ✓
+    expect(body).toMatch(/if \(!shouldNotifySettledBackgroundTask\(\{ settled, hadRunning \}\)\) return/)
+    expect(useConversationsCode.match(/planBackgroundTaskNotify\(/g)?.length).toBe(1)   // 只挂一处 ✓
+  })
+})
+
+describe('终态"只发一次"由状态保证（不靠毫秒时间戳）', () => {
+  it('连续两次：第二次不同 at、settled 非空，但集合已清空（hadRunning=false）⇒ 只发一次', () => {
+    const first = shouldNotifySettledBackgroundTask({ settled: { kind: 'failed', at: 1000 }, hadRunning: true })
+    const second = shouldNotifySettledBackgroundTask({ settled: { kind: 'failed', at: 1001 }, hadRunning: false })
+    expect(first).toBe(true)
+    expect(second).toBe(false)          // 与 at 无关 ✓
+  })
+
+  it('新的一轮（集合再次从非空变空）⇒ 必须再发', () => {
+    expect(shouldNotifySettledBackgroundTask({ settled: { kind: 'failed', at: 2000 }, hadRunning: true })).toBe(true)
+  })
+
+  it('没有终态 或 集合本来就是空的 ⇒ 不发', () => {
+    expect(shouldNotifySettledBackgroundTask({ settled: null, hadRunning: true })).toBe(false)
+    expect(shouldNotifySettledBackgroundTask({ settled: { kind: 'completed', at: 1 }, hadRunning: false })).toBe(false)
+  })
+
+  it('守卫：hadRunning 必须在 store.setState **之前**读', () => {
+    const start = useConversationsCode.indexOf('function markBackgroundTaskSettled')
+    const body = useConversationsCode.slice(start, useConversationsCode.indexOf('function backgroundTaskNotifySummary'))
+    expect(body.indexOf('const hadRunning = (store.getState().backgroundTasks[sessionId] ?? []).length > 0'))
+      .toBeGreaterThan(-1)
+    expect(body.indexOf('const hadRunning')).toBeLessThan(body.indexOf('store.setState'))
+    expect(body).toMatch(/shouldNotifySettledBackgroundTask\(\{ settled, hadRunning \}\)/)
   })
 })
 

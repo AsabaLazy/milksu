@@ -145,11 +145,13 @@ describe('调用点守卫（源码级）', () => {
     expect(source).toMatch(/notifyTaskIfNeeded\(/)
     // 每类触发源各挂一处（调用点计数）：
     //   1) 审批卡到达（needs-input）
-    //   2) 终态事件统一发送器 notifyTerminalTurn（失败类 + 完成类共用**同一条发送路径**）
-    //   3) 停滞看门狗 notifyTurnStall（边沿发一次，kind = stalled）
+    //   2) 后台任务终态（收口函数 markBackgroundTaskSettled 内）
+    //   3) 终态事件统一发送器 notifyTerminalTurn（失败类 + 完成类共用**同一条发送路径**）
+    //   4) 停滞看门狗 notifyTurnStall（边沿发一次，kind = stalled）
     // 新增类别时这里要同步 +1，并由各自的守卫断言落在正确的分支里。
     // 共用发送器是故意的：不允许为某一类另开第二条发送路径（那会绕过去重与开关）。
-    expect(source.match(/notifyTaskIfNeeded\(/g)?.length).toBe(3)
+    expect(source.match(/notifyTaskIfNeeded\(/g)?.length).toBe(4)
+    expect(source).toMatch(/function markBackgroundTaskSettled/)
     // 不轮询：调用点必须落在 approval.requested 分支内（其后紧跟 approval.resolved 分支）
     // 从 approval 分支入口起算：调用必须在**该分支内**，且其后紧接 approval.resolved 分支（不轮询）。
     expect(source).toMatch(/if \(type === 'approval\.requested' && requestId\) \{[\s\S]{0,1200}?notifyTaskIfNeeded\([\s\S]{0,1200}?\} else if \(type === 'approval\.resolved' && requestId\) \{/)
