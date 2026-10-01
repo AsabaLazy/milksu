@@ -9,7 +9,8 @@
  *   show(payload, deps)         真正弹（平台分支；依赖注入以便测试）
  *
  * 契约（见计划）：method = 'NotifyTask'
- *   args: { kind, conversationId, conversationTitle, summary, silent? }
+ *   args: { kind, conversationId, conversationTitle, summary, silent?, activeConversationId? }
+ *     activeConversationId = 渲染层**此刻正在看**的会话（窗口级的 focused 不够用，见下）。
  *   返回: { shown: boolean, reason?: 'focused'|'disabled'|'rate-limited'|'unsupported'|'invalid' }
  */
 
@@ -78,17 +79,36 @@ function notSeenKey(lastNotified, key, now = Date.now()) {
 }
 
 /**
+ * 这个通知的会话，就是用户**此刻正在看**的会话吗？
+ *
+ * "前台压制"要压的是"你正在看的那个会话"（会话级），**不是**"整个 App 窗口"（窗口级）✗。
+ * 真机实测（读者日常：agent 在后台会话跑、人在前台看别的会话）：后台会话弹出工具预算审批卡时
+ * 通知没发 —— 因为 `mainWindow.isFocused()` 只看"整个窗口聚焦"，把**所有**会话的通知都压掉了。
+ * 所以这里必须是"窗口聚焦 且 通知的会话 == 正在看的会话"才压：后台会话照弹 ✓。
+ * 任一侧为空（不知道在看谁 / 通知没带会话）⇒ 不压（宁可多弹，不可吞掉该来的通知）。
+ */
+function isViewingNotifiedConversation(input, state) {
+  const viewing = String(state?.activeConversationId ?? "").trim();
+  if (!viewing) return false;
+  const target = String(input?.conversationId ?? "").trim();
+  return target !== "" && viewing === target;
+}
+
+/**
  * 决策（纯函数 ✓）。顺序固定，先判"不可能的"再判"该不该弹"：
- *   非法 kind ⇒ invalid ｜ 开关关 ⇒ disabled ｜ 窗口聚焦 ⇒ focused
+ *   非法 kind ⇒ invalid ｜ 开关关 ⇒ disabled ｜ 正在看这个会话 ⇒ focused
  *   ｜ 同**完整键**在窗口内已通知过 ⇒ rate-limited ｜ 平台不支持 ⇒ unsupported ｜ 否则 notify
- * state: { enabled?, focused?, platform?, lastNotified? (Set|Map|对象), now? }
+ * state: { enabled?, focused? (整个窗口是否聚焦), activeConversationId?, platform?,
+ *          lastNotified? (Set|Map|对象), now? }
+ *   focused + activeConversationId 合起来才是"会话级前台压制"；只看 focused 是旧的窗口级 bug ✗。
  *   now 可注入 ⇒ 时间窗口可确定性测试（缺省 Date.now()）。
  */
 function shouldNotify(input = {}, state = {}) {
   const kind = normalizeKind(input);
   if (!TASK_NOTIFY_KINDS.includes(kind)) return "invalid";
   if (state.enabled === false) return "disabled";
-  if (state.focused === true) return "focused";
+  // 会话级压制：窗口聚焦 **且** 通知的会话正是用户在看的那个 ⇒ 压。后台会话一律照弹。
+  if (state.focused === true && isViewingNotifiedConversation(input, state)) return "focused";
   const key = taskNotifyKey(input);
   const now = Number.isFinite(state.now) ? Number(state.now) : Date.now();
   if (!notSeenKey(state.lastNotified, key, now)) return "rate-limited";
@@ -154,6 +174,7 @@ module.exports = {
   TASK_NOTIFY_WINDOW_MS,
   KIND_PREFIX,
   taskNotifyKey,
+  isViewingNotifiedConversation,
   shouldNotify,
   buildPayload,
   show,

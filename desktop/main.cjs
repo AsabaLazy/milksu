@@ -1196,6 +1196,10 @@ ipcMain.handle('milksu:invoke', async (event, request) => {
       // "聚焦"要的是"这个窗口是当前活跃窗口"，**不是**"窗口可见" ✗：
       // 窗口在后台但仍可见（用户在看别的 App）时也要弹通知，否则等于永远收不到。
       focused: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()),
+      // 会话级压制："正在看的会话"由渲染层随 args 传上来（渲染层知道 activeId）。
+      // focused 只代表"整个窗口聚焦"；二者合起来才是"你正在看的那个会话" ⇒ 只压它，后台会话照弹。
+      // 缺省/空 ⇒ task-notify.cjs 不压（不吞掉通知 ✗）。
+      activeConversationId: notifyInput.activeConversationId,
       platform: process.platform,
       lastNotified: taskNotifySeen,
       now: notifyNow,

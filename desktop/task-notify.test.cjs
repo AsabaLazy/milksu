@@ -6,15 +6,47 @@ const { shouldNotify, buildPayload, show, KIND_PREFIX, badgeAfterNotify, badgeAf
 const base = { kind: "completed", conversationId: "c1", conversationTitle: "对话 A", summary: "跑完了" };
 const free = { enabled: true, focused: false, platform: "darwin" };
 
-test("聚焦 ⇒ focused（不通知）", () => {
-  assert.equal(shouldNotify(base, { ...free, focused: true }), "focused");
+test("聚焦 + 正在看的就是通知的会话 ⇒ focused（不通知）", () => {
+  assert.equal(shouldNotify(base, { ...free, focused: true, activeConversationId: "c1" }), "focused");
 });
 
-// 停滞看门狗走同一条管道 ⇒ 前台压制对它也生效（用户在 App 里能直接看到停滞横幅，不必再弹系统通知）。
+// 真机实测的读者日常：agent 在后台会话跑、人在前台看**别的**会话。
+// 旧口径只看 mainWindow.isFocused()（窗口级）⇒ 把**所有**会话的通知都压掉（该来的全被吞）。
+// 新口径是会话级：只有"聚焦 且 通知的会话就是正在看的那个"才压。
+test("聚焦但正在看的是别的会话 ⇒ notify（后台会话不被窗口聚焦压掉）", () => {
+  assert.equal(shouldNotify(base, { ...free, focused: true, activeConversationId: "c2" }), "notify");
+});
+
+test("没聚焦（人在别的 App）⇒ 就是那个会话也照弹", () => {
+  assert.equal(shouldNotify(base, { ...free, focused: false, activeConversationId: "c1" }), "notify");
+});
+
+// 判据真值表（focused × 是否正在看该会话），四组固定口径：
+//   聚焦 + 同会话 ⇒ focused（压） ｜ 聚焦 + 别会话 ⇒ notify
+//   未聚焦 + 同会话 ⇒ notify      ｜ 未聚焦 + 别会话 ⇒ notify
+// 另外：任一侧为空（不知道在看谁 / 通知没带会话）⇒ **不压**（宁可多弹，不可吞掉该来的通知）。
+test("会话级压制真值表 + 缺省不压", () => {
+  assert.equal(shouldNotify(base, { ...free, focused: true, activeConversationId: "c1" }), "focused");
+  assert.equal(shouldNotify(base, { ...free, focused: true, activeConversationId: "c2" }), "notify");
+  assert.equal(shouldNotify(base, { ...free, focused: false, activeConversationId: "c1" }), "notify");
+  assert.equal(shouldNotify(base, { ...free, focused: false, activeConversationId: "c2" }), "notify");
+  // 缺省/空白 activeConversationId ⇒ 不压
+  assert.equal(shouldNotify(base, { ...free, focused: true }), "notify");
+  assert.equal(shouldNotify(base, { ...free, focused: true, activeConversationId: "" }), "notify");
+  assert.equal(shouldNotify(base, { ...free, focused: true, activeConversationId: "   " }), "notify");
+  // 通知本身没有 conversationId ⇒ 不压
+  assert.equal(
+    shouldNotify({ ...base, conversationId: "  " }, { ...free, focused: true, activeConversationId: "  " }),
+    "notify",
+  );
+});
+
+// 停滞看门狗走同一条管道 ⇒ 会话级压制对它也生效（在看这个会话时不必再弹系统通知）。
 // 停滞是**独立的第四类**（stalled），不得复用 needs-decision（后者语义是“等你拍板”）。
-test("停滞类 stalled：聚焦时被压制；不在前台才通知", () => {
+test("停滞类 stalled：在看这个会话时被压制；后台/不在前台才通知", () => {
   const stall = { kind: "stalled", conversationId: "c1", conversationTitle: "对话 A", summary: "模型请求已 2 分钟无响应，可回到会话选择重试或停止", turnKey: 123 };
-  assert.equal(shouldNotify(stall, { ...free, focused: true }), "focused");
+  assert.equal(shouldNotify(stall, { ...free, focused: true, activeConversationId: "c1" }), "focused");
+  assert.equal(shouldNotify(stall, { ...free, focused: true, activeConversationId: "c2" }), "notify");
   assert.equal(shouldNotify(stall, free), "notify");
 });
 
@@ -178,6 +210,8 @@ test("main.cjs：NotifyTask 分支存在，且没有新增 ipcMain.handle", () =
   // ⇒ 实测把通知全部压掉（直调返回 reason=focused，macOS 侧从未登记过本 App）。
   assert.match(source, /mainWindow\.isFocused\(\)/, "聚焦判断必须是 isFocused");
   assert.doesNotMatch(source, /focused:[^\n]*isVisible\(\)/, "聚焦判断不得退回 isVisible（会把后台可见窗口当成在看）");
+  // 会话级压制："正在看的会话"必须由渲染层随 args 传到 shouldNotify 的 state（否则退回窗口级 ✗）
+  assert.match(source, /activeConversationId: notifyInput\.activeConversationId/, "必须把渲染层传的 activeConversationId 透传给 shouldNotify");
   const handles = source.match(/ipcMain\.handle\(/g) ?? [];
   assert.equal(handles.length, 1, "不得新增第二条 ipcMain.handle 通道");
 });

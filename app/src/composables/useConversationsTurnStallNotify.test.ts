@@ -80,6 +80,8 @@ describe('useConversations 停滞通知', () => {
     expect(String(args.summary)).toContain('可回到会话选择重试或停止')
     // turnKey 与回合起点同源（非空）。
     expect(String(args.turnKey ?? '')).not.toBe('')
+    // 会话级前台压制：正在看的会话（activeId）必须随 args 透传给外壳（否则退回窗口级 ✗）。
+    expect(args.activeConversationId).toBe('conversation-1')
   })
 
   it('engine-gone 用另一句措辞（进程心跳没了，不是请求静默）', async () => {

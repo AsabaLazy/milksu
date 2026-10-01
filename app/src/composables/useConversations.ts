@@ -1596,6 +1596,14 @@ export function createConversationsRuntime(options?: {
   /** 已通知过的后台任务终态（键含 at ⇒ 同一次终态重放不发 ✓，新一轮终态是新键 ⇒ 会再发 ✓）。*/
   const notifiedSettledOutcomes = new Set<string>()
 
+  /**
+   * 通知用：发出**那一刻**用户正在看的会话（现读，不用快照 ✓ —— 事件与通知之间用户可能切了会话）。
+   * 空 ⇒ 外壳不压制（宁可不压，不可吞掉该来的通知 ✗）。由 notifyTaskIfNeeded 透传为 args.activeConversationId。
+   */
+  function activeConversationIdForNotify(): string {
+    return String(store.getState().activeId ?? '').trim()
+  }
+
   function markBackgroundTaskSettled(input: {
     sessionId: string
     tasks: { id: string; name: string; status: string }[]
@@ -1635,6 +1643,8 @@ export function createConversationsRuntime(options?: {
         // 与本次终态去重键里的 at 同源 ⇒ 外壳键与渲染层键一致（重复投递不会被放行）。
         summary: backgroundTaskNotifySummary(settled),
         turnKey: Number(settled?.at) || 0,
+        // 会话级前台压制：后台任务失败通知也要现读"正在看的会话"。
+        activeConversationId: activeConversationIdForNotify(),
       },
     )
   }
@@ -1780,6 +1790,8 @@ export function createConversationsRuntime(options?: {
         summary: turnStallNotifySummary(stallKind, Number(input?.quietMs) || 0),
         // 与本地去重键里的 runStartedAt 同源 ⇒ 外壳键与渲染层键一致（重入不会因值不同而被放行）。
         turnKey: runStartedAt ?? 0,
+        // 会话级前台压制：现读"正在看的会话"随 args 透传给外壳。
+        activeConversationId: activeConversationIdForNotify(),
       },
     )
   }
@@ -1813,6 +1825,8 @@ export function createConversationsRuntime(options?: {
         ).milksu?.invoke?.(method, args),
         summary: input.summary,
         turnKey: input.at,
+        // 会话级前台压制：现读"正在看的会话"随 args 透传给外壳。
+        activeConversationId: activeConversationIdForNotify(),
       },
     )
   }
@@ -4294,6 +4308,8 @@ export function createConversationsRuntime(options?: {
                   milksu?: { invoke?: (method: string, args: Record<string, unknown>) => unknown }
                 }
               ).milksu?.invoke?.(method, args),
+              // 会话级前台压制：现读"正在看的会话"随 args 透传给外壳。
+              activeConversationId: activeConversationIdForNotify(),
             },
           )
         } else if (type === 'approval.resolved' && requestId) {

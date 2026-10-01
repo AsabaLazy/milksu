@@ -131,6 +131,12 @@ export interface TaskNotifyDeps {
    * 否则同一事件的重复投递会被当成两次不同事件而重复弹窗 ✗。
    */
   turnKey?: string | number
+  /**
+   * 渲染层**此刻正在看**的会话（useConversations 的 activeId）。
+   * 外壳用它做**会话级**前台压制：只有"窗口聚焦 且 通知的会话就是正在看的会话"才压；
+   * 后台会话（正在跑、人在看别的会话）照弹 ✓。缺省/空 ⇒ 外壳不压。
+   */
+  activeConversationId?: string
 }
 
 /**
@@ -212,6 +218,9 @@ export function notifyTaskIfNeeded(snapshot: TaskNotifySnapshot, deps: TaskNotif
   if (!wantsSound) args.silent = true
   const turnKey = String(deps?.turnKey ?? '').trim()
   if (turnKey) args.turnKey = turnKey
+  // "正在看的会话"随 args 透传给外壳 ⇒ 外壳才能做会话级压制（后台会话不被窗口聚焦压掉）。
+  const activeConversationId = String(deps?.activeConversationId ?? '').trim()
+  if (activeConversationId) args.activeConversationId = activeConversationId
   deps?.invoke?.('NotifyTask', args)
   return plan.decision
 }

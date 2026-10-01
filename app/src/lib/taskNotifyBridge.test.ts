@@ -126,6 +126,28 @@ describe('notifyTaskIfNeeded', () => {
     notifyTaskIfNeeded({ turn: 'completed', conversation, enabled: allOn }, { invoke, silent: false })
     expect(invoke.mock.calls[0][1]).not.toHaveProperty('silent')
   })
+
+  // 真机实测：窗口级 isFocused 会把**所有**会话的通知压掉（人在看别的会话时，后台会话的该来通知全被吞）。
+  // 所以"正在看的会话"必须随 args 传给外壳，外壳才能做**会话级**压制。
+  it('带上"正在看的会话" ⇒ 透传成 args.activeConversationId（归一化去空白）', () => {
+    const invoke = vi.fn()
+    notifyTaskIfNeeded(
+      { conversation: { ...conversation, messages: pendingAsk }, enabled: allOn },
+      { invoke, summary: '等你拍板', activeConversationId: ' c1 ' },
+    )
+    expect(invoke.mock.calls[0]?.[1]).toMatchObject({ activeConversationId: 'c1' })
+  })
+
+  it('没给/空白 ⇒ 不带 activeConversationId（外壳不压制，后台通知照弹）', () => {
+    for (const activeConversationId of [undefined, '', '   ']) {
+      const invoke = vi.fn()
+      notifyTaskIfNeeded(
+        { conversation: { ...conversation, messages: pendingAsk }, enabled: allOn },
+        { invoke, activeConversationId },
+      )
+      expect(invoke.mock.calls[0][1]).not.toHaveProperty('activeConversationId')
+    }
+  })
 })
 
 // 源码级守卫：确认调用点真的挂在"会话状态变化处"（审批卡到达时），且只挂这一处。
