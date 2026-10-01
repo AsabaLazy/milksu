@@ -9,12 +9,17 @@ export const firstPartyCodingSkillNames = Object.freeze([
   "create-technical-deliverables",
   "release-milksu",
   "recon-authorized-target",
-  "deep-research",
 ]);
 
 // Keep Pi-only skills out of the shared names consumed by the DSH catalog.
 export const piOnlyCodingSkillNames = Object.freeze([
   "deep-research",
+]);
+
+// DSH-only skills mirror piOnly: the durable Deep Research workflow is Pi-only, so
+// DSH sessions keep the lightweight web-research skill under its own name.
+export const dshOnlyCodingSkillNames = Object.freeze([
+  "deep-research-web",
 ]);
 
 export const optionalCodingSkillNames = Object.freeze([
@@ -27,7 +32,7 @@ export const reviewedCodingSkillNames = Object.freeze([
   "archify",
 ]);
 
-function disabledSkillNames(value) {
+export function disabledSkillNames(value) {
   if (!Array.isArray(value)) return new Set();
   return new Set(value.map(name => String(name ?? "").trim()).filter(Boolean));
 }

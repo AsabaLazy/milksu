@@ -24,6 +24,7 @@ import {
   firstPartyCodingSkillNames,
   optionalCodingSkillNames,
   piOnlyCodingSkillNames,
+  dshOnlyCodingSkillNames,
 } from '../sidecar/pi/bridge-skills.js'
 import { prepareReviewedTypeScript } from '../sidecar/pi/prepare-reviewed-ts.mjs'
 import {
@@ -1495,6 +1496,7 @@ async function buildSidecar(platform) {
     ...firstPartyCodingSkillNames,
     ...optionalCodingSkillNames,
     ...piOnlyCodingSkillNames,
+    ...dshOnlyCodingSkillNames,
   ]
   const firstPartySkills = packagedSkillNames.map(name => ({
     name,
@@ -1914,6 +1916,13 @@ async function buildSidecar(platform) {
         paths: piOnlyCodingSkillNames.map(name => `skills/${name}`),
         scope: 'pi-only',
       },
+      dshOnly: {
+        package: '@milksu/coding-skills',
+        version: '1',
+        origin: 'first-party',
+        paths: dshOnlyCodingSkillNames.map(name => `skills/${name}`),
+        scope: 'dsh-only',
+      },
       archify: {
         package: 'tt-a1i/archify',
         version: archifyPackage.version,
@@ -2171,6 +2180,7 @@ async function smokeSidecar(platform) {
       ...firstPartyCodingSkillNames,
       ...optionalCodingSkillNames,
       ...piOnlyCodingSkillNames,
+      ...dshOnlyCodingSkillNames,
     ].flatMap(name => [
       join(output, 'skills', name, 'SKILL.md'),
       join(output, 'skills', name, 'agents', 'openai.yaml'),

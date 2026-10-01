@@ -11,12 +11,12 @@ const (
 )
 
 const (
-	TaskLaunching    = "launching"
-	TaskRunning      = "running"
-	TaskCompleted    = "completed"
-	TaskFailed       = "failed"
-	TaskCancelled    = "cancelled"
-	TaskInterrupted  = "interrupted"
+	TaskLaunching   = "launching"
+	TaskRunning     = "running"
+	TaskCompleted   = "completed"
+	TaskFailed      = "failed"
+	TaskCancelled   = "cancelled"
+	TaskInterrupted = "interrupted"
 )
 
 const (

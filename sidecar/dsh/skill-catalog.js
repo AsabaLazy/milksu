@@ -9,14 +9,22 @@ import {
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  disabledSkillNames,
+  dshOnlyCodingSkillNames,
   optionalCodingSkillNames,
+  piOnlyCodingSkillNames,
   resolveCodingSkillPaths,
   reviewedCodingSkillNames,
 } from "../pi/bridge-skills.js";
 
+// The managed set covers every name the catalogs have ever published, so a skill
+// that moved to another kernel (deep-research is Pi-only now) has its stale
+// symlink cleaned from an existing DSH home.
 const managedSkillNames = new Set([
   ...reviewedCodingSkillNames,
   ...optionalCodingSkillNames,
+  ...piOnlyCodingSkillNames,
+  ...dshOnlyCodingSkillNames,
 ]);
 
 export function skillResourceRoot(here = dirname(fileURLToPath(import.meta.url))) {
@@ -53,12 +61,20 @@ export function syncDshSkillCatalog({
   if (!home || !isAbsolute(home)) return [];
   const destRoot = join(home, "skills");
   mkdirSync(destRoot, { recursive: true, mode: 0o700 });
-  const enabled = resolveCodingSkillPaths(
-    resourceRoot,
-    "",
-    disabledSkills,
-    extraSkillPaths,
-  );
+  const enabled = [
+    ...resolveCodingSkillPaths(
+      resourceRoot,
+      "",
+      disabledSkills,
+      extraSkillPaths,
+    ),
+    // DSH-only skills are appended the same way resolvePiCodingSkillPaths
+    // appends the Pi-only ones: the shared base stays kernel-neutral.
+    ...dshOnlyCodingSkillNames
+      .filter(name => !disabledSkillNames(disabledSkills).has(name))
+      .map(name => join(resourceRoot, "skills", name))
+      .filter(path => existsSync(join(path, "SKILL.md"))),
+  ];
   const enabledNames = new Set(enabled.map(path => basename(path)));
   for (const name of managedSkillNames) {
     if (enabledNames.has(name)) continue;

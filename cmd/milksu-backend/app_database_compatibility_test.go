@@ -92,7 +92,7 @@ func TestDatabaseCompatDescriptors(t *testing.T) {
 		},
 		{
 			LogicalName:  "Research",
-			RelativePath: "research/research.sqlite3",
+			RelativePath: "data/domain/research/research.sqlite3",
 			Supported:    research.SupportedDatabaseVersion,
 		},
 	}
@@ -171,7 +171,7 @@ func TestGetLocalDataStatusIncludesDatabaseCompatibility(t *testing.T) {
 	if err := usageStore.Close(); err != nil {
 		t.Fatal(err)
 	}
-	researchStore, err := research.OpenStore(dataDirectory)
+	researchStore, err := research.OpenStore(filepath.Join(dataDirectory, "data"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestGetLocalDataStatusIncludesDatabaseCompatibility(t *testing.T) {
 
 	researchStatus := status.Databases[5]
 	if researchStatus.LogicalName != "Research" ||
-		researchStatus.RelativePath != "research/research.sqlite3" ||
+		researchStatus.RelativePath != "data/domain/research/research.sqlite3" ||
 		researchStatus.State != "compatible" ||
 		researchStatus.Current == nil || *researchStatus.Current != research.SupportedDatabaseVersion ||
 		researchStatus.Supported == nil || *researchStatus.Supported != research.SupportedDatabaseVersion {

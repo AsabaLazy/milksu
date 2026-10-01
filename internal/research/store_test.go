@@ -128,7 +128,7 @@ func TestStorePersistsRunTaskSourceCitationAndArtifactAcrossReopen(t *testing.T)
 	if source.ArtifactRef != hex.EncodeToString(digest[:]) {
 		t.Fatalf("ArtifactRef = %q, want content digest %x", source.ArtifactRef, digest)
 	}
-	artifactPath := filepath.Join(dataDirectory, "research", "artifacts", run.ID, source.ArtifactRef)
+	artifactPath := filepath.Join(dataDirectory, "domain", "research", "artifacts", run.ID, source.ArtifactRef)
 	artifactData, err := os.ReadFile(artifactPath)
 	if err != nil || string(artifactData) != string(content) {
 		t.Fatalf("persisted artifact = %q, %v; want %q", artifactData, err, content)
@@ -141,7 +141,7 @@ func TestStorePersistsRunTaskSourceCitationAndArtifactAcrossReopen(t *testing.T)
 
 func TestResearchV1DatabaseMigratesAndPersistsUnconfirmedWorkerStop(t *testing.T) {
 	dataDirectory := t.TempDir()
-	databasePath := filepath.Join(dataDirectory, "research", "research.sqlite3")
+	databasePath := filepath.Join(dataDirectory, "domain", "research", "research.sqlite3")
 	migrator, err := sqlitemigrate.Open(databasePath, []sqlitemigrate.Migration{{
 		Version: 1,
 		Name:    researchV1MigrationName,
@@ -208,7 +208,7 @@ func TestResearchV1DatabaseMigratesAndPersistsUnconfirmedWorkerStop(t *testing.T
 
 func TestResearchV2DatabaseMigratesAndAcceptsLaunchingTasks(t *testing.T) {
 	dataDirectory := t.TempDir()
-	databasePath := filepath.Join(dataDirectory, "research", "research.sqlite3")
+	databasePath := filepath.Join(dataDirectory, "domain", "research", "research.sqlite3")
 	migrator, err := sqlitemigrate.Open(databasePath, []sqlitemigrate.Migration{
 		{
 			Version: 1,

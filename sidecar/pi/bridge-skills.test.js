@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   extraCodingSkillPaths,
   firstPartyCodingSkillNames,
+  dshOnlyCodingSkillNames,
   optionalCodingSkillNames,
   piOnlyCodingSkillNames,
   resolveCodingSkillPaths,
@@ -117,6 +118,20 @@ test("deep research resolves in Pi but stays out of the shared DSH path", () => 
   assert.equal(fields.name, name);
   assert.ok(fields.description.startsWith("Use "));
   assert.ok(fields.description.length <= 400);
+});
+
+test("the DSH lightweight web research skill mirrors the Pi-only split", () => {
+  const name = "deep-research-web";
+  const path = join(repositoryRoot, "skills", name);
+  assert.deepEqual(dshOnlyCodingSkillNames, [name]);
+  assert.ok(!firstPartyCodingSkillNames.includes(name));
+  assert.ok(!piOnlyCodingSkillNames.includes(name));
+  // Pi 会话不带轻量版：Pi 的目录解析里不出现它。
+  assert.ok(!resolvePiCodingSkillPaths(repositoryRoot).includes(path));
+  assert.ok(!resolveCodingSkillPaths(repositoryRoot).includes(path));
+  const fields = skillFrontmatter(name);
+  assert.equal(fields.name, name);
+  assert.ok(fields.description.startsWith("Single-turn"));
 });
 
 test("first-party skill descriptions are Pi routing rules", () => {

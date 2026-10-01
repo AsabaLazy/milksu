@@ -102,11 +102,13 @@ func TestExportBackupIncludesUserStateAndExcludesCredentials(t *testing.T) {
 
 func TestExportBackupIncludesResearchArtifacts(t *testing.T) {
 	root := t.TempDir()
-	databasePath := filepath.Join(root, "research", "research.sqlite3")
+	databasePath := filepath.Join(root, "data", "domain", "research", "research.sqlite3")
 	createBackupDatabase(t, databasePath)
 	artifactData := "persisted source extract"
 	artifactPath := filepath.Join(
 		root,
+		"data",
+		"domain",
 		"research",
 		"artifacts",
 		"research_run_1",
@@ -126,9 +128,11 @@ func TestExportBackupIncludesResearchArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	names, _ := readBackupArchive(t, destination)
+	// 归档条目统一带 "data/" 前缀（与 main 现行备份语义一致），研究库在新布局
+	// data/domain/research/ 下，因此条目是 data/data/domain/...。
 	for _, required := range []string{
-		"data/research/research.sqlite3",
-		"data/research/artifacts/research_run_1/" + strings.Repeat("a", 64),
+		"data/data/domain/research/research.sqlite3",
+		"data/data/domain/research/artifacts/research_run_1/" + strings.Repeat("a", 64),
 	} {
 		if !slices.Contains(names, required) {
 			t.Fatalf("research backup is missing %q: %#v", required, names)
@@ -138,7 +142,7 @@ func TestExportBackupIncludesResearchArtifacts(t *testing.T) {
 	extractBackupEntry(
 		t,
 		destination,
-		"data/research/artifacts/research_run_1/"+strings.Repeat("a", 64),
+		"data/data/domain/research/artifacts/research_run_1/"+strings.Repeat("a", 64),
 		copyPath,
 	)
 	if contents, err := os.ReadFile(copyPath); err != nil || string(contents) != artifactData {

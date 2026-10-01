@@ -139,6 +139,8 @@ interface ComposerSkillOption {
   label: string
   description: string
   icon: LucideIcon
+  /** 只在对应内核的会话里出现（深度研究双轨）。 */
+  kernel?: 'pi' | 'dsh'
 }
 
 const skillIcons: Record<string, LucideIcon> = {
@@ -148,6 +150,7 @@ const skillIcons: Record<string, LucideIcon> = {
   'review-security': ShieldCheck,
   'create-technical-deliverables': FileText,
   'deep-research': LibraryBig,
+  'deep-research-web': LibraryBig,
   archify: Route,
   'release-milksu': PackageCheck,
 }
@@ -892,8 +895,12 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
   const hasUnfinishedGoal = Boolean(goal && goal.status !== 'complete')
   const availableSkillOptions = useMemo(() => {
     const available = new Set(availableSkills ?? [])
+    // 深度研究双轨：kernel 限定的技能只在对应内核的会话里出现
+    // （Pi 是 durable 工作流，DSH 是轻量网页检索），两个内核各只见一条。
+    const sessionKernel = kernel ?? 'pi'
     const known = new Map(reviewedComposerSkills
       .filter(skill => available.has(skill.name))
+      .filter(skill => !skill.kernel || skill.kernel === sessionKernel)
       .map(skill => [skill.name, skill]))
     for (const skill of importedSkills ?? []) {
       if (!skill.name || !available.has(skill.name)) continue

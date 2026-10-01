@@ -4,6 +4,8 @@ export interface CodingSkillDefinition {
   name: string
   label: string
   description: string
+  /** 只在对应内核的会话里出现：深度研究双轨（Pi 走 durable 工作流，DSH 走轻量网页检索）。 */
+  kernel?: 'pi' | 'dsh'
 }
 
 export const CODING_SKILLS: readonly CodingSkillDefinition[] = [
@@ -41,6 +43,13 @@ export const CODING_SKILLS: readonly CodingSkillDefinition[] = [
     name: 'deep-research',
     label: t('深度研究', 'Deep research'),
     description: t('围绕一个问题做多轮检索、溯源交叉验证，产出带来源的报告', 'Run multi-round retrieval with source tracing and cross-checks, then produce a cited report'),
+    kernel: 'pi',
+  },
+  {
+    name: 'deep-research-web',
+    label: t('深度研究', 'Deep research'),
+    description: t('围绕一个问题做多轮检索、溯源交叉验证，产出带来源的报告', 'Run multi-round retrieval with source tracing and cross-checks, then produce a cited report'),
+    kernel: 'dsh',
   },
   {
     name: 'release-milksu',

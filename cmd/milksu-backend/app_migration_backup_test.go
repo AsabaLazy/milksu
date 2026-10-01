@@ -185,7 +185,7 @@ func openAndCloseAllDatabases(t *testing.T, root string) {
 	if err := usageStore.Close(); err != nil {
 		t.Fatal(err)
 	}
-	researchStore, err := research.OpenStore(root)
+	researchStore, err := research.OpenStore(filepath.Join(root, "data"))
 	if err != nil {
 		t.Fatal(err)
 	}

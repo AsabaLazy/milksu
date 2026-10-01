@@ -16,6 +16,28 @@ test("syncs enabled product skills into DSH_HOME/skills", async () => {
   assert.match(hidden, /disable-model-invocation: true/);
 });
 
+test("syncs the DSH-only web research skill and cleans the Pi-only deep-research link", async () => {
+  const home = await mkdtemp(join(tmpdir(), "milksu-dsh-skills-"));
+  // 旧版把 durable 的 deep-research 同步进了 DSH 目录（#163 时代）：残留链接必须被清掉。
+  const stale = join(home, "skills", "deep-research");
+  await mkdir(stale, { recursive: true, mode: 0o700 });
+  await writeFile(join(stale, "SKILL.md"), "---\nname: deep-research\ndescription: stale.\n---\n", {
+    mode: 0o600,
+  });
+
+  const names = syncDshSkillCatalog({ dshHome: home });
+
+  assert.ok(names.includes("deep-research-web"), "the lightweight skill must reach the DSH catalog");
+  assert.ok(!names.includes("deep-research"), "the Pi-only durable skill must not be synced");
+  await assert.rejects(
+    readFile(join(home, "skills", "deep-research", "SKILL.md")),
+    /ENOENT/,
+    "the stale deep-research link must be cleaned from an existing DSH home",
+  );
+  const body = await readFile(join(home, "skills", "deep-research-web", "SKILL.md"), "utf8");
+  assert.match(body, /name: deep-research-web/);
+});
+
 test("drops disabled product skills from the DSH catalog root", async () => {
   const home = await mkdtemp(join(tmpdir(), "milksu-dsh-skills-"));
   syncDshSkillCatalog({ dshHome: home });

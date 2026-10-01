@@ -727,9 +727,14 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
     const skills = [
       ...enabledCodingSkillNames(settings?.disabled_skills),
       ...userSkillNames,
-    ].filter(name => name !== 'deep-research')
+    ].filter(name => name !== 'deep-research' && name !== 'deep-research-web')
+    // 深度研究双轨：Pi 用 durable 工作流（deep-research），DSH 用轻量网页检索
+    // （deep-research-web），各自内核的会话只带上自己那一条。
     if (agentKernel === 'pi' && !settings?.disabled_skills?.includes('deep-research')) {
       skills.push('deep-research')
+    }
+    if (agentKernel === 'dsh' && !settings?.disabled_skills?.includes('deep-research-web')) {
+      skills.push('deep-research-web')
     }
     return skills
   }, [agentKernel, settings?.disabled_skills, userSkillNames])
@@ -3600,7 +3605,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                 variant="outline"
                 size="sm"
                 className="rounded-full"
-                onClick={() => composer.current?.applySkill('deep-research')}
+                onClick={() => composer.current?.applySkill(agentKernel === 'pi' ? 'deep-research' : 'deep-research-web')}
               >
                 <LibraryBig className="size-3.5" />
                 {t('深度研究', 'Deep research')}
