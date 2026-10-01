@@ -3150,9 +3150,11 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                 </Button>
               </div>
             ) : null}
+            {/* 待批准条（吸底槽位）。底色必须**不透明**：半透明底 `sticky` 压在滚动的转写
+                上面时，下面的正文会从条里透出来，读不清（同「问题横幅」361eaf6e 的病根 ⇒ 用实色 `bg-popover`）。 */}
             {pendingApprovalMessage ? (
               <div
-                className="sticky z-30 mx-auto mb-2 flex w-[72%] items-center gap-2 rounded-xl border border-primary/40 bg-background/95 px-3 py-2 shadow-sm"
+                className="sticky z-30 mx-auto mb-2 flex w-[72%] items-center gap-2 rounded-xl border border-primary/40 bg-popover px-3 py-2 shadow-sm"
                 style={{ top: 'var(--chat-edge-top)' }}
                 data-testid="approval-bar"
               >
