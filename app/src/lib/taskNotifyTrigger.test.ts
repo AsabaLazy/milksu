@@ -9,7 +9,6 @@ describe('decideTaskNotify', () => {
     expect(decideTaskNotify({ needsDecision: true, enabled: allOn })).toEqual({ notify: true, kind: 'needs-input', reason: 'ok' })
     expect(decideTaskNotify({ turn: 'failed', enabled: allOn })).toEqual({ notify: true, kind: 'failed', reason: 'ok' })
     expect(decideTaskNotify({ turn: 'completed', enabled: allOn })).toEqual({ notify: true, kind: 'completed', reason: 'ok' })
-    expect(decideTaskNotify({ backgroundTask: 'completed', enabled: allOn })).toEqual({ notify: true, kind: 'completed', reason: 'ok' })
   })
 
   it('第四类 stalled（模型疑似挂死）单列，有自己的开关，不复用 needs_input', () => {
@@ -26,7 +25,7 @@ describe('decideTaskNotify', () => {
     expect(decideTaskNotify({ stalled: true, needsDecision: true, turn: 'failed', enabled: allOn }).kind).toBe('stalled')
     expect(decideTaskNotify({ needsDecision: true, turn: 'completed', enabled: allOn }).kind).toBe('needs-input')
     expect(decideTaskNotify({ needsDecision: true, turn: 'failed', enabled: allOn }).kind).toBe('needs-input')
-    expect(decideTaskNotify({ turn: 'failed', backgroundTask: 'completed', enabled: allOn }).kind).toBe('failed')
+    expect(decideTaskNotify({ turn: 'failed', backgroundTask: 'failed', enabled: allOn }).kind).toBe('failed')
   })
 
   it('开关逐项关掉 ⇒ disabled', () => {

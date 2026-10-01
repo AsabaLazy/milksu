@@ -19,6 +19,9 @@ export type BackgroundTaskOutcome = {
    *  （真机截图：一批 11 个里只有 1 个失败，却写成“共 11 个”✗）。 */
   failedCount?: number
   firstName: string
+  /** 第一个**失败**任务的名字（仅 failed 终态）。通知正文要报的是它，
+   *  不是整批第一个任务（firstName 可能是个成功的任务）。 */
+  firstFailedName?: string
   at: number
 }
 
@@ -57,8 +60,15 @@ export function outcomeForTasks(
   const list = (Array.isArray(tasks) ? tasks : []).filter(Boolean)
   if (list.length === 0) return null
   if (list.some(task => ['failed', 'timed_out'].includes(statusOf(task)))) {
-    const failedCount = list.filter(task => ['failed', 'timed_out'].includes(statusOf(task))).length
-    return { kind: 'failed', count: list.length, failedCount, firstName: nameOf(list[0]), at }
+    const failed = list.filter(task => ['failed', 'timed_out'].includes(statusOf(task)))
+    return {
+      kind: 'failed',
+      count: list.length,
+      failedCount: failed.length,
+      firstName: nameOf(list[0]),
+      firstFailedName: nameOf(failed[0]),
+      at,
+    }
   }
   if (list.some(task => statusOf(task) === 'cancelled')) {
     return { kind: 'cancelled', count: list.length, firstName: nameOf(list[0]), at }

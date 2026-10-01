@@ -46,13 +46,15 @@ describe('background strip digest', () => {
       { id: 'c', name: '清理', status: 'succeeded' },
     ], 1_000)
     expect(outcome).toMatchObject({ kind: 'failed', count: 3, failedCount: 1, firstName: '打包' })
+    // 通知正文要报第一个**失败**任务，不是整批第一个（它可能是成功的）。
+    expect(outcome).toMatchObject({ firstFailedName: '部署' })
     // 超时也算失败；两 个失败时才报 2。
     const two = outcomeForTasks([
       { id: 'a', name: '打包', status: 'failed' },
       { id: 'b', name: '部署', status: 'timed_out' },
       { id: 'c', name: '清理', status: 'succeeded' },
     ], 1_000)
-    expect(two).toMatchObject({ kind: 'failed', count: 3, failedCount: 2 })
+    expect(two).toMatchObject({ kind: 'failed', count: 3, failedCount: 2, firstFailedName: '打包' })
   })
 
   // 终态停 15 秒（用户拍）；过期后 visible 变 false（收起）。

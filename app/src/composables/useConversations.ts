@@ -1570,6 +1570,8 @@ export function createConversationsRuntime(options?: {
     // 口径：只有**失败**发（成功/被取消在 planBackgroundTaskNotify 里拦下），走 failed 开关。
     if (!shouldNotifySettledBackgroundTask({ settled, hadRunning })) return
     const plan = planBackgroundTaskNotify({ conversationId: sessionId, outcome: settled, seen: notifiedSettledOutcomes })
+    // 没有 outcome 就没有去重键：不往 Set 里塞空串，也没有可通知的终态。
+    if (!plan.key) return
     if (!plan.notify || !plan.backgroundTask) { notifiedSettledOutcomes.add(plan.key); return }
     notifiedSettledOutcomes.add(plan.key)
     const notifyTitle = s.conversations.find(item => item.id === sessionId)?.title ?? ''
@@ -1594,8 +1596,9 @@ export function createConversationsRuntime(options?: {
 
   /** 后台任务的通知正文：带上任务名，且与"任务被异常终止"/"任务已完成"区分开。
    *  目前只有**失败**会走到这里（成功不发是读者口径）。 */
-  function backgroundTaskNotifySummary(outcome: { firstName?: string, count?: number, failedCount?: number } | null): string {
-    const name = String(outcome?.firstName ?? '').trim()
+  function backgroundTaskNotifySummary(outcome: { firstName?: string, firstFailedName?: string, count?: number, failedCount?: number } | null): string {
+    // 报第一个**失败**任务的名字，不是整批第一个任务（它可能是成功的）。
+    const name = String(outcome?.firstFailedName ?? outcome?.firstName ?? '').trim()
     const failedCount = Number(outcome?.failedCount) || 0
     if (!name) return t('后台任务失败', 'Background task failed')
     // 只按**失败个数**措辞：一个失败就只报名字（拿一批的总数当"失败几个"会误导 ✗）。

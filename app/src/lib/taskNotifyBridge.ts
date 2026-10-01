@@ -232,7 +232,7 @@ export function planBackgroundTaskNotify(input: {
   conversationId: string
   outcome?: { kind: BackgroundOutcomeKind; at: number } | null
   seen?: { has(key: string): boolean }
-}): { notify: boolean; key: string; backgroundTask?: 'failed' | 'completed' } {
+}): { notify: boolean; key: string; backgroundTask?: 'failed' } {
   const outcome = input?.outcome
   if (!outcome) return { notify: false, key: '' }
   const kind = outcome.kind
