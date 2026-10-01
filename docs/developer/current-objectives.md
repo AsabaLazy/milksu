@@ -80,10 +80,14 @@ tag 与分发 source `a654c4d5` 之间只差测试与文档提交，无未打进
 - 新会话不再默认继承最近项目（#169 改向），这条新行为还没有真机验收。
 - 宽作业用 `recon-authorized-target` Skill，不造 typed sweep。Computer Use 选窗器仍是可选人工面。
 - DSH `bash` 没有 MilkSU 侧超时上界。
-- Deep Research durable 工作流（PR #206，集成分支 `integration/deep-research`）：Pi 会话走
-  typed research 动作 + research store + Research 浏览器 egress 隔离；DSH 会话保留轻量
-  `deep-research-web` Skill。作者侧返工项（worker-stop 死锁出口、孤儿 worker 清理等）
-  完成前不合入 main。
+- Deep Research durable 工作流已合入（#206 经 `integration/deep-research` 集成）：Pi 会话走
+  typed research 动作 + research store（`data/domain/research/`）+ Research 浏览器 egress
+  隔离；DSH 会话用轻量 `deep-research-web` Skill。已知待修（作者后续 PR 跟进）：
+  sidecar 失联后 worker-stop-unconfirmed 无出口（该会话被禁止新 run，只能 Resume 后再
+  Cancel 解开）；强杀后孤儿 worker 无清理（detached 子代理可能继续消耗 API 额度）；
+  research store 带 v1→v2→v3 迁移阶梯（schema 从未发行，待收平成最终形态）；
+  `MILKSU_ELECTRON_USER_DATA_DIR` 隐藏 env 无调用方待删；删除会话的研究数据级联非原子。
+  Windows / Linux 原生完整研究任务未验收；Pi 同轮 worker overlap 未验证。
 - 任务状况桌面通知（#210）当前只在 macOS / Windows 弹；Linux 返回 `unsupported`，
   设置页已注明「Linux 暂不支持桌面通知」。五类开关全默认关。
 - issue #117 的另外几问、#155、#156 还没接到决策这一层。
