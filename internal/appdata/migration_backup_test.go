@@ -286,5 +286,6 @@ func managedMigrationDescriptorsForTest() []DatabaseDescriptor {
 		{LogicalName: "NSSCTF Catalog", RelativePath: "data/domain/nssctf/catalog.sqlite3", Supported: 1},
 		{LogicalName: "CTFshow Catalog", RelativePath: "data/domain/ctfshow/catalog.sqlite3", Supported: 1},
 		{LogicalName: "Coding Agent Usage", RelativePath: "data/stores/usage/model-usage.sqlite3", Supported: 1},
+		{LogicalName: "Research", RelativePath: "data/domain/research/research.sqlite3", Supported: 1},
 	}
 }

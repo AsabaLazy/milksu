@@ -6,10 +6,43 @@ export const subagentYieldSchema = "milksu-subagent-yield/v1";
 
 const yieldStatuses = new Set(["succeeded", "failed", "aborted"]);
 
-const secretAssignment = /\b(api[_ -]?key|key|token|secret|password|relay[_ -]?key)\s*[:=]\s*[^\s,;]+/gi;
-const secretQuery = /([?&](?:api[_-]?key|key|token|secret|password)=)[^&#\s]+/gi;
+const secretAssignment = /\b((?:[A-Za-z0-9.-]+[_-])*(?:api[_ -]?key|access[_ -]?key(?:[_ -]?id)?|client[_ -]?secret|private[_ -]?key|credential|signature|authorization|secret|token|password|passwd|relay[_ -]?key|key|sig))\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&]+)/gi;
+const secretQuery = /([?&;])([^=&#;\s"'<>]+)=([^&#;\s"'<>]*)/gi;
 const secretBearer = /(bearer\s+)[a-z0-9._~+/=-]{8,}/gi;
 const secretToken = /\b(?:sk[-_]|gsk_|aiza|nss_agent_|tfk_|tokenflux)[a-z0-9._-]{8,}/gi;
+
+function isSensitiveSecretName(value) {
+  let name = String(value ?? "").trim().toLowerCase();
+  try {
+    name = decodeURIComponent(name.replaceAll("+", " "));
+  } catch {
+    // Keep the encoded name; normalized matching below still catches common keys.
+  }
+  const normalized = name.replace(/[^a-z0-9]/g, "");
+  return normalized === "key"
+    || normalized === "sig"
+    || normalized === "auth"
+    || normalized.includes("apikey")
+    || normalized.includes("accesskey")
+    || normalized.includes("clientsecret")
+    || normalized.includes("privatekey")
+    || normalized.includes("credential")
+    || normalized.includes("signature")
+    || normalized.includes("authorization")
+    || normalized.includes("password")
+    || normalized.includes("passwd")
+    || normalized.includes("secret")
+    || normalized.endsWith("token");
+}
+
+function redactTextSecrets(value) {
+  return String(value ?? "")
+    .replace(/(https?:\/\/[^/\s?#:@]+:)[^/@\s]*@/gi, "$1[REDACTED]@")
+    .replace(secretAssignment, "$1=[REDACTED]")
+    .replace(secretQuery, (match, separator, key) => (
+      isSensitiveSecretName(key) ? `${separator}${key}=[REDACTED]` : match
+    ));
+}
 
 function exactObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -20,29 +53,76 @@ function boundedText(value, limit) {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
     .replace(secretToken, "[REDACTED]")
     .replace(secretBearer, "$1[REDACTED]")
-    .replace(secretAssignment, "$1=[REDACTED]")
-    .replace(secretQuery, "$1[REDACTED]");
-  if (text.length <= limit) return text;
-  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+    .replace(secretAssignment, "$1=[REDACTED]");
+  const redacted = redactTextSecrets(text);
+  if (redacted.length <= limit) return redacted;
+  return `${redacted.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
 function redactSecretValues(text, secrets) {
   let next = String(text ?? "");
   for (const secret of secrets) {
     if (!secret) continue;
-    next = next.split(secret).join("[REDACTED]");
+    if (secret.length < 8) {
+      const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      next = next.replace(
+        new RegExp(`(^|[^A-Za-z0-9_])${escaped}(?=$|[^A-Za-z0-9_])`, "g"),
+        "$1[REDACTED]",
+      );
+    } else {
+      next = next.split(secret).join("[REDACTED]");
+    }
   }
   return next;
 }
 
-function collectEnvSecrets(environment = process.env) {
-  return [
+function collectEnvSecrets(environment = process.env, additionalSecrets = []) {
+  const explicit = [
     environment.MILKSU_RELAY_KEY,
     environment.TOKENFLUX_API_KEY,
     environment.OPENAI_API_KEY,
     environment.MILKSU_IMAGEGEN_API_KEY,
     environment.MILKSU_CUSTOM_PROVIDER_KEY,
-  ].filter(value => String(value ?? "").trim().length >= 8);
+  ];
+  const providerEnvironment = Object.entries(environment)
+    .filter(([name]) => /(?:^|_)(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD)$/i.test(name))
+    .map(([, value]) => value);
+  return [...new Set([...explicit, ...providerEnvironment, ...(additionalSecrets ?? [])])]
+    .filter(value => String(value ?? "").trim().length > 0);
+}
+
+function redactStructuredSecrets(value, secrets) {
+  if (typeof value === "string") {
+    const redacted = redactSecretValues(value, secrets)
+      .replace(secretToken, "[REDACTED]")
+      .replace(secretBearer, "$1[REDACTED]");
+    return redactTextSecrets(redacted);
+  }
+  if (Array.isArray(value)) return value.map(item => redactStructuredSecrets(item, secrets));
+  if (exactObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => (
+      [key, isSensitiveSecretName(key) ? "[REDACTED]" : redactStructuredSecrets(child, secrets)]
+    )));
+  }
+  return value;
+}
+
+export function redactResearchText(value, environment = process.env, additionalSecrets = []) {
+  return redactStructuredSecrets(value, collectEnvSecrets(environment, additionalSecrets));
+}
+
+export function projectSubagentTaskForRenderer(task, environment = process.env, secrets = []) {
+  return redactResearchText({
+    id: task?.id,
+    role: task?.role,
+    status: task?.status,
+    durationMs: task?.durationMs,
+    exitCode: task?.exitCode,
+    yield: task?.yield,
+    toolCallId: task?.toolCallId,
+    summary: task?.summary,
+    transcript: task?.transcript,
+  }, environment, secrets);
 }
 
 function homePrefixes(homeDirectory = homedir()) {
@@ -246,7 +326,7 @@ export function normalizeSubagentYield(raw, options = {}) {
       : source.aborted
         ? "aborted"
         : "failed";
-  const secrets = collectEnvSecrets(options.environment);
+  const secrets = collectEnvSecrets(options.environment, options.secrets);
   const role = String(options.role ?? source.agent ?? source.role ?? "").trim();
   const originalPaths = [
     ...(filesSource ?? []).map(entry => (typeof entry === "string" ? entry : entry?.path)),
@@ -323,8 +403,24 @@ function contentText(content) {
     .join("\n");
 }
 
-function shortSummary(text) {
-  const compact = boundedText(String(text ?? "").replace(/\s+/g, " ").trim(), 240);
+function trailingSubagentDiagnostic(result) {
+  const sections = contentText(result?.content).trim().split(/\r?\n\s*\r?\n/);
+  const candidate = String(sections.at(-1) ?? "").trim();
+  if (
+    !candidate
+    || candidate.startsWith("{")
+    || /^(?:files\[|findings\[|exitCode=|status=|cwd=|worktreeId=)/i.test(candidate)
+  ) {
+    return "";
+  }
+  return candidate;
+}
+
+function shortSummary(text, secrets = collectEnvSecrets()) {
+  const compact = boundedText(
+    redactStructuredSecrets(String(text ?? "").replace(/\s+/g, " ").trim(), secrets),
+    240,
+  );
   return compact;
 }
 
@@ -391,6 +487,7 @@ export function projectSubagentRosterStart(input, context = {}) {
   const worktrees = context.worktrees ?? context.collaboration?.worktrees ?? [];
   return stubs.map((entry, index) => {
     const role = String(entry?.agent ?? "subagent").trim() || "subagent";
+    const prompt = String(entry?.task ?? "").trim();
     const cwd = String(entry?.cwd ?? input?.cwd ?? context.workspace ?? "").trim();
     const worktree = worktrees.find(value => value.path === cwd);
     const id = stubs.length === 1 ? toolCallId : `${toolCallId}:${index}`;
@@ -398,10 +495,101 @@ export function projectSubagentRosterStart(input, context = {}) {
       id,
       toolCallId,
       role,
+      prompt,
       status: "start",
       cwd: worktree?.id || undefined,
     };
   });
+}
+
+export function projectResearchSubagentUpdates(
+  tasks,
+  baselineIDs = new Set(),
+  trackedIDs = new Set(),
+  environment = process.env,
+  additionalSecrets = [],
+) {
+  const secrets = collectEnvSecrets(environment, additionalSecrets);
+  const updates = [];
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const id = String(task?.id ?? "").trim();
+    if (!id || baselineIDs.has(id)) continue;
+    trackedIDs.add(id);
+    const result = task.transcript
+      || task.summary
+      || (task.yield ? JSON.stringify(task.yield) : "");
+    updates.push({
+      id,
+      prompt: boundedText(redactSecretValues(task.prompt, secrets), 16000),
+      status: task.status === "start" ? "running" : String(task.status ?? "running"),
+      workerId: boundedText(task.runId ?? task.id, 200),
+      result: boundedText(redactSecretValues(result, secrets), 8000),
+    });
+  }
+  return updates;
+}
+
+export function assignResearchSubagentTaskID(task, context) {
+  const workerTaskID = String(task?.id ?? "").trim();
+  if (!workerTaskID) return "";
+  const existing = context?.workerTaskIDs?.get(workerTaskID);
+  if (existing) return existing;
+  if (context?.baseline?.has(workerTaskID)) return "";
+  const prompt = String(task?.prompt ?? "").trim();
+  const pending = context?.pending?.get(prompt);
+  if (!pending?.length) return "";
+  const taskID = pending.shift();
+  if (!pending.length) context.pending.delete(prompt);
+  context.workerTaskIDs.set(workerTaskID, taskID);
+  context.workerPrompts?.set(workerTaskID, prompt);
+  return taskID;
+}
+
+export function researchSubagentLaunchBlockReason(input, runContexts = [], toolCallId = "") {
+  const contexts = Array.isArray(runContexts) ? runContexts : [];
+  const active = contexts
+    .filter(context => !context?.cancelled);
+  if (!active.length) {
+    return contexts.some(context => (
+      context?.cancelled
+      && (context.workerTaskIDs?.size > 0 || context.pending?.size > 0)
+    ))
+      ? "Research worker cancellation is in progress; do not launch another subagent yet."
+      : "";
+  }
+  const action = String(input?.action ?? "").trim();
+  if (action) {
+    return ["list", "status", "get"].includes(action)
+      ? ""
+      : "During a research run, use cancel_research_run instead of steering or stopping individual workers.";
+  }
+  if (String(input?.agent ?? "").trim() !== "scout") {
+    return "Research runs accept only the bundled read-only scout worker.";
+  }
+  const prompt = String(input?.task ?? "").trim();
+  if (!prompt) {
+    return "Research worker launch is missing its registered task prompt.";
+  }
+  const callID = String(toolCallId ?? "").trim();
+  // The start event may consume the pending prompt before the pre-call policy hook runs.
+  const alreadyBound = callID && active.some(context => (
+    context.workerTaskIDs?.has(callID)
+    && context.workerPrompts?.get(callID) === prompt
+  ));
+  if (!alreadyBound && !active.some(context => context.pending?.get(prompt)?.length)) {
+    const pendingPromptLengths = active.flatMap(context => (
+      context.pending instanceof Map
+        ? [...context.pending.entries()]
+          .filter(([, taskIDs]) => taskIDs?.length)
+          .map(([registeredPrompt]) => registeredPrompt.length)
+        : []
+    ));
+    const mismatch = pendingPromptLengths.length
+      ? `submitted length ${prompt.length}; pending prompt lengths: ${pendingPromptLengths.join(", ")}`
+      : "no pending registered prompt is visible";
+    return `Research worker launch blocked: ${mismatch}. Reuse the exact taskPrompt returned by register_research_task.`;
+  }
+  return "";
 }
 
 export function projectSubagentRosterEnd(tasks, result, context = {}) {
@@ -425,6 +613,12 @@ export function projectSubagentRosterEnd(tasks, result, context = {}) {
     }));
   }
   const yields = projectSubagentYields(result, context);
+  const resultRows = Array.isArray(result?.details?.results)
+    ? result.details.results
+    : Array.isArray(result?.results)
+      ? result.results
+      : [result];
+  const secrets = collectEnvSecrets(context.environment, context.secrets);
   const list = Array.isArray(tasks) ? tasks : [];
   if (!list.length && yields.length) {
     return yields.map((value, index) => ({
@@ -440,12 +634,25 @@ export function projectSubagentRosterEnd(tasks, result, context = {}) {
   return list.map((task, index) => {
     const value = yields[index] ?? yields[0];
     const failed = context.isError || !value || value.status !== "succeeded";
+    const resultRow = resultRows[index] ?? resultRows[0];
+    const diagnostic = [resultRow?.error, resultRow?.message, resultRow?.output]
+      .find(item => typeof item === "string" && item.trim());
+    const contentDiagnostic = trailingSubagentDiagnostic(result);
+    const summary = failed
+      ? shortSummary(
+        diagnostic
+          || contentDiagnostic
+          || (value?.exitCode !== undefined ? `Worker exited with code ${value.exitCode}.` : ""),
+        secrets,
+      ) || task.summary
+      : task.summary;
     return {
       ...task,
       status: failed ? "failed" : "succeeded",
       durationMs: context.durationMs,
       exitCode: value?.exitCode,
       yield: value,
+      summary,
     };
   });
 }
@@ -469,16 +676,17 @@ export function projectSubagentYields(raw, context = {}) {
 }
 
 export function projectSubagentToolResult(event, context = {}) {
+  const secrets = collectEnvSecrets(context.environment, context.secrets);
   if (event?.details?.mode === "management") {
     return {
-      content: event?.content,
-      details: event?.details,
+      content: redactStructuredSecrets(event?.content, secrets),
+      details: redactStructuredSecrets(event?.details, secrets),
     };
   }
   if (isAsyncSubagentReceipt(event)) {
     return {
-      content: event?.content,
-      details: event?.details,
+      content: redactStructuredSecrets(event?.content, secrets),
+      details: redactStructuredSecrets(event?.details, secrets),
     };
   }
   const raw = {
@@ -506,7 +714,7 @@ export function projectSubagentToolResult(event, context = {}) {
   });
   const primary = yields[0];
   const original = contentText(event?.content);
-  const summary = shortSummary(original);
+  const summary = shortSummary(original, secrets);
   const fieldLines = yields.map((value, index) => (
     yields.length > 1
       ? `#${index}\n${formatSubagentYieldLines(value)}`
@@ -517,7 +725,7 @@ export function projectSubagentToolResult(event, context = {}) {
   return {
     content: [{ type: "text", text }],
     details: {
-      ...(exactObject(event?.details) ? event.details : {}),
+      ...(exactObject(event?.details) ? redactStructuredSecrets(event.details, secrets) : {}),
       schema: subagentYieldSchema,
       yield: primary,
       yields,
@@ -539,7 +747,6 @@ export function createSubagentYieldExtension(getContext) {
   return (pi) => {
     pi.on("tool_result", async (event) => {
       if (String(event?.toolName ?? "").trim() !== "subagent") return undefined;
-      if (isAsyncSubagentReceipt(event)) return undefined;
       const context = typeof getContext === "function" ? getContext() : getContext;
       try {
         return projectSubagentToolResult(event, context);

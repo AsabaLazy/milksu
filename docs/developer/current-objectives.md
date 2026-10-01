@@ -80,6 +80,10 @@ tag 与分发 source `a654c4d5` 之间只差测试与文档提交，无未打进
 - 新会话不再默认继承最近项目（#169 改向），这条新行为还没有真机验收。
 - 宽作业用 `recon-authorized-target` Skill，不造 typed sweep。Computer Use 选窗器仍是可选人工面。
 - DSH `bash` 没有 MilkSU 侧超时上界。
+- Deep Research durable 工作流（PR #206，集成分支 `integration/deep-research`）：Pi 会话走
+  typed research 动作 + research store + Research 浏览器 egress 隔离；DSH 会话保留轻量
+  `deep-research-web` Skill。作者侧返工项（worker-stop 死锁出口、孤儿 worker 清理等）
+  完成前不合入 main。
 - 任务状况桌面通知（#210）当前只在 macOS / Windows 弹；Linux 返回 `unsupported`，
   设置页已注明「Linux 暂不支持桌面通知」。五类开关全默认关。
 - issue #117 的另外几问、#155、#156 还没接到决策这一层。

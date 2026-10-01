@@ -37,6 +37,7 @@ import (
 	"github.com/MilkSU-Official/milksu/internal/modelusage"
 	"github.com/MilkSU-Official/milksu/internal/nssctf"
 	pluginruntime "github.com/MilkSU-Official/milksu/internal/plugin"
+	"github.com/MilkSU-Official/milksu/internal/research"
 	"github.com/MilkSU-Official/milksu/internal/securityruntime"
 	"github.com/MilkSU-Official/milksu/internal/securitytools"
 	"github.com/MilkSU-Official/milksu/internal/sessionindex"
@@ -81,6 +82,7 @@ type App struct {
 	ctfAgent            *ctfAgentRecorder
 	ctfMemory           *ctf.MemoryStore
 	vulnJobs            *vuln.Service
+	research            *research.Service
 	sessionIndex        *sessionindex.Store
 	companion           *companion.Runtime
 	evalSuite           *evalsuite.Service
@@ -371,12 +373,26 @@ func newAppWithDesktopHost(host desktopHost) (*App, error) {
 		_ = application.nssctfCatalog.Close()
 		return nil, fmt.Errorf("create Coding Agent usage ledger: %w", err)
 	}
+	researchStore, err := research.OpenStore(dataDirectory)
+	if err != nil {
+		_ = application.modelUsage.Close()
+		_ = application.vulnJobs.Close()
+		_ = application.ctfMemory.Close()
+		_ = application.ctfJobs.Close()
+		_ = application.jobs.Close()
+		application.browserBridge.Close()
+		_ = application.ctfshowCatalog.Close()
+		_ = application.nssctfCatalog.Close()
+		return nil, fmt.Errorf("create research store: %w", err)
+	}
+	application.research = research.NewService(researchStore)
 	application.evalSuite, err = evalsuite.NewService(
 		application.sendEvalTurn,
 		application.AbortMessage,
 		application.emitEvalProgress,
 	)
 	if err != nil {
+		_ = application.research.Close()
 		_ = application.modelUsage.Close()
 		_ = application.vulnJobs.Close()
 		_ = application.ctfMemory.Close()
@@ -467,6 +483,12 @@ func (a *App) Startup(ctx context.Context) {
 		time.Since(vulnRecoverStarted).Milliseconds(),
 		time.Since(startupBegan).Milliseconds(),
 	)
+	if a.research != nil {
+		if err := a.research.Recover(ctx); err != nil {
+			a.diagnostics.Record("research", "error", "research run recovery failed")
+			a.emitDesktopEvent("research-run-error", err.Error())
+		}
+	}
 }
 
 func (a *App) Shutdown(_ context.Context) {
@@ -478,6 +500,9 @@ func (a *App) Shutdown(_ context.Context) {
 	_ = a.ctfJobs.Close()
 	_ = a.jobs.Close()
 	a.engines.Close()
+	if a.research != nil {
+		_ = a.research.Close()
+	}
 	if a.modelUsage != nil {
 		_ = a.modelUsage.Close()
 	}
@@ -1244,6 +1269,11 @@ func (a *App) DeleteArchivedConversation(id string) error {
 	if err := a.stopConversationResources(id); err != nil {
 		return err
 	}
+	if a.research != nil {
+		if err := a.research.DeleteConversation(a.commandContext(), id); err != nil {
+			return err
+		}
+	}
 	if err := a.conversations.DeleteArchived(id); err != nil {
 		return err
 	}
@@ -1258,6 +1288,11 @@ func (a *App) DeleteConversation(id string) error {
 	}
 	if err := a.stopConversationResources(id); err != nil {
 		return err
+	}
+	if a.research != nil {
+		if err := a.research.DeleteConversation(a.commandContext(), id); err != nil {
+			return err
+		}
 	}
 	if err := a.conversations.Delete(id); err != nil {
 		return err
@@ -2741,6 +2776,9 @@ func (a *App) CancelVulnJob(id string) error {
 }
 
 func (a *App) emitEngineEvent(event engine.Event) {
+	if event.Type == "session.destroyed" || event.Type == "engine.error" {
+		a.interruptResearchRunForSession(event.SessionID)
+	}
 	// A real model failure marks that model in the picker; a successful call clears it again.
 	a.applyModelCallOutcome(event)
 	if event.Error != "" {
@@ -2763,6 +2801,36 @@ func (a *App) emitEngineEvent(event engine.Event) {
 		event.Type == "engine.stopped" ||
 		event.Type == "engine.sidecar_stopped" {
 		a.diagnostics.Record("coding-engine", "info", event.Type)
+	}
+	if event.Type == "runtime.research_tasks" {
+		a.recordResearchWorkerEvent(event)
+	}
+	if event.Type == "runtime.research_cancel_unconfirmed" {
+		message := "research worker stop could not be confirmed"
+		if event.ResearchRunID != "" {
+			message += " for run " + event.ResearchRunID
+		}
+		a.diagnostics.Record("research", "warning", message)
+		if a.research != nil && event.SessionID != "" && event.ResearchRunID != "" {
+			if _, err := a.research.SetWorkerStopUnconfirmed(
+				context.Background(),
+				event.SessionID,
+				event.ResearchRunID,
+				true,
+			); err != nil {
+				a.diagnostics.Record("research", "warning", "unconfirmed Research worker stop could not be persisted")
+			}
+		}
+	}
+	if event.Type == "runtime.research_cancel_confirmed" && a.research != nil {
+		if _, err := a.research.SetWorkerStopUnconfirmed(
+			context.Background(),
+			event.SessionID,
+			event.ResearchRunID,
+			false,
+		); err != nil {
+			a.diagnostics.Record("research", "warning", "confirmed Research worker stop could not be persisted")
+		}
 	}
 	switch event.Type {
 	case "engine.started":

@@ -105,6 +105,25 @@ export function codingBrowserToolBlockReason(input, serverName) {
   return "";
 }
 
+export function researchBrowserToolBlockReason(input, serverName, researchActive, allowedTabId = "") {
+  if (!researchActive) return "";
+  if (String(serverName ?? "").trim() === browserUseMcpServerName) {
+    return "Deep Research fallback uses only this conversation's managed Browser.";
+  }
+  if (String(serverName ?? "").trim() !== codingBrowserMcpServerName) return "";
+  const tool = baseToolName(input?.tool);
+  if ([
+    "browser_snapshot",
+    "browser_take_screenshot",
+    "browser_wait_for",
+  ].includes(tool)) {
+    return allowedTabId
+      ? ""
+      : "Open or focus a public source with the typed research Browser action before inspection.";
+  }
+  return "Deep Research Browser fallback is read-only; open sources with the typed research Browser action and inspect them without navigation or form interaction.";
+}
+
 export function codingBrowserEvidenceFileBlockReason(input, serverName, sessionId) {
   if (!firstPartyBrowserServer(serverName)) return "";
   const filename = String(parseMcpArguments(input).filename ?? "").trim();

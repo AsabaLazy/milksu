@@ -56,6 +56,20 @@ func (a *App) desktopCall(method string, payload, result any) error {
 	return a.host.Call(a.commandContext(), method, payload, result)
 }
 
+func (a *App) setResearchBrowserMode(conversationID string, enabled bool) error {
+	if a.browserBridge == nil {
+		return nil
+	}
+	descriptor, ok := a.browserBridge.CodingDescriptor(conversationID)
+	if !ok || strings.TrimSpace(descriptor.SessionID) == "" {
+		return nil
+	}
+	return a.desktopCall("browser.setResearchMode", map[string]any{
+		"sessionId": descriptor.SessionID,
+		"enabled":   enabled,
+	}, nil)
+}
+
 func (a *App) saveFile(options desktopDialogOptions) (string, error) {
 	var path string
 	err := a.desktopCall("dialog.save", options, &path)
@@ -174,6 +188,10 @@ func (h *electronCodingHost) ListTabs(sessionID string) (browsercap.CodingHostTa
 
 func (h *electronCodingHost) CreateTab(sessionID, targetURL string) (browsercap.CodingHostTabList, error) {
 	return h.list("browser.createTab", sessionID, map[string]any{"url": targetURL})
+}
+
+func (h *electronCodingHost) CreateResearchTab(sessionID, targetURL string) (browsercap.CodingHostTabList, error) {
+	return h.list("browser.createResearchTab", sessionID, map[string]any{"url": targetURL})
 }
 
 func (h *electronCodingHost) ActivateTab(sessionID, tabID string) (browsercap.CodingHostTabList, error) {

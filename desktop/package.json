@@ -38,6 +38,8 @@
       "build-tracking-view.cjs",
       "task-notify.cjs",
       "browser-view-attachment.cjs",
+      "research-browser-network-policy.cjs",
+      "research-browser-lifecycle.cjs",
       "update-manager.cjs",
       "update-artifacts.cjs",
       "linux-update-apply.cjs",

@@ -10,7 +10,8 @@ const runningStates = new Set([
   "pending",
   "scheduled",
 ]);
-const failedTokens = ["fail", "stop", "kill", "timeout", "error", "reject"];
+const failedTokens = ["fail", "stop", "kill", "timeout", "error", "reject", "cancel", "abort", "interrupt"];
+const succeededStates = new Set(["success", "succeeded", "complete", "completed", "done"]);
 const transcriptLimit = 8000;
 const summaryLimit = 240;
 
@@ -53,7 +54,7 @@ export function mapAsyncSubagentStatus(state) {
   const value = String(state ?? "").trim().toLowerCase();
   if (!value || runningStates.has(value)) return "running";
   if (failedTokens.some(token => value.includes(token))) return "failed";
-  return "succeeded";
+  return succeededStates.has(value) ? "succeeded" : "failed";
 }
 
 function hideAbsolutePaths(text) {

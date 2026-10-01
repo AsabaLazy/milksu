@@ -20,6 +20,9 @@ import {
   type ModelCatalogSnapshot,
   type StartupRecoveryStatus,
   type UpdateStatus,
+  type ResearchRun,
+  type ResearchSnapshot,
+  type ResearchSourceDetail,
   type CompanionArchive,
   type CompanionApprovedMemory,
   type CompanionBoardSnapshot,
@@ -273,6 +276,11 @@ interface DesktopAppBindings {
   ListConversations(): Promise<unknown>
   ClearConversationProblem(conversationId: string): Promise<unknown>
   ListArchivedConversations(): Promise<unknown>
+  ListResearchRuns(conversationId: string): Promise<ResearchRun[]>
+  GetResearchRun(conversationId: string, runId: string): Promise<ResearchSnapshot>
+  ReadResearchSource(conversationId: string, sourceId: string): Promise<ResearchSourceDetail>
+  ReadResearchReport(conversationId: string, runId: string): Promise<string>
+  CancelResearchRun(conversationId: string, runId: string): Promise<ResearchRun>
   SaveConversation(conversation: unknown): Promise<void>
   EnsureCodingArtifactWorkspace(conversationId: string): Promise<string>
   ArchiveConversation(id: string): Promise<void>
@@ -790,6 +798,28 @@ export async function invokeCommand<T = unknown>(command: string, args?: Command
         return app.ClearConversationProblem(args?.conversationId as string) as Promise<T>
       case 'list_archived_conversations':
         return app.ListArchivedConversations() as Promise<T>
+      case 'list_research_runs':
+        return app.ListResearchRuns(args?.conversationId as string) as Promise<T>
+      case 'get_research_run':
+        return app.GetResearchRun(
+          args?.conversationId as string,
+          args?.runId as string,
+        ) as Promise<T>
+      case 'read_research_source':
+        return app.ReadResearchSource(
+          args?.conversationId as string,
+          args?.sourceId as string,
+        ) as Promise<T>
+      case 'read_research_report':
+        return app.ReadResearchReport(
+          args?.conversationId as string,
+          args?.runId as string,
+        ) as Promise<T>
+      case 'cancel_research_run':
+        return app.CancelResearchRun(
+          args?.conversationId as string,
+          args?.runId as string,
+        ) as Promise<T>
       case 'save_conversation':
         return app.SaveConversation(args?.conversation) as Promise<T>
       case 'ensure_coding_artifact_workspace':

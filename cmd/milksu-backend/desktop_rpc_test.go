@@ -116,6 +116,25 @@ func TestDesktopAppMethodsMatchRendererBindings(t *testing.T) {
 	}
 }
 
+func TestResearchDesktopMethodsAreRendererBindings(t *testing.T) {
+	methods := desktopAppMethods(&App{})
+	for _, name := range []string{
+		"ListResearchRuns",
+		"GetResearchRun",
+		"ReadResearchSource",
+		"ReadResearchReport",
+		"CancelResearchRun",
+	} {
+		method, ok := methods[name]
+		if !ok || method.source != desktopRPCSourceRenderer {
+			t.Errorf("research desktop method %s = %#v, want renderer binding", name, method)
+		}
+	}
+	if _, ok := methods["ResumeResearchRun"]; ok {
+		t.Fatal("research resume must re-enter the Pi conversation, not call a renderer RPC")
+	}
+}
+
 func TestExportedAppMethodsHaveExplicitRPCDisposition(t *testing.T) {
 	registered := desktopAppMethods(&App{})
 	appType := reflect.TypeOf((*App)(nil))

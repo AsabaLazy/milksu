@@ -17,8 +17,11 @@ test("async status maps live states to running and stop-like states to failed", 
   assert.equal(mapAsyncSubagentStatus("failed"), "failed");
   assert.equal(mapAsyncSubagentStatus("stopped"), "failed");
   assert.equal(mapAsyncSubagentStatus("timeout"), "failed");
+  assert.equal(mapAsyncSubagentStatus("cancelled"), "failed");
+  assert.equal(mapAsyncSubagentStatus("aborted"), "failed");
+  assert.equal(mapAsyncSubagentStatus("interrupted"), "failed");
   assert.equal(mapAsyncSubagentStatus("complete"), "succeeded");
-  assert.equal(mapAsyncSubagentStatus("partial"), "succeeded");
+  assert.equal(mapAsyncSubagentStatus("partial"), "failed");
 });
 
 test("async dir reads stay inside temp or the workspace and hide absolute paths", async () => {

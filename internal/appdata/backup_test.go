@@ -100,6 +100,52 @@ func TestExportBackupIncludesUserStateAndExcludesCredentials(t *testing.T) {
 	}
 }
 
+func TestExportBackupIncludesResearchArtifacts(t *testing.T) {
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "research", "research.sqlite3")
+	createBackupDatabase(t, databasePath)
+	artifactData := "persisted source extract"
+	artifactPath := filepath.Join(
+		root,
+		"research",
+		"artifacts",
+		"research_run_1",
+		strings.Repeat("a", 64),
+	)
+	writeBackupFixture(t, artifactPath, artifactData)
+
+	destination := filepath.Join(t.TempDir(), "research-backup.zip")
+	exported, err := ExportBackup(context.Background(), root, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exported.FileCount != 2 {
+		t.Fatalf("research backup file count = %d, want 2", exported.FileCount)
+	}
+	if _, err := ValidateBackup(destination); err != nil {
+		t.Fatal(err)
+	}
+	names, _ := readBackupArchive(t, destination)
+	for _, required := range []string{
+		"data/research/research.sqlite3",
+		"data/research/artifacts/research_run_1/" + strings.Repeat("a", 64),
+	} {
+		if !slices.Contains(names, required) {
+			t.Fatalf("research backup is missing %q: %#v", required, names)
+		}
+	}
+	copyPath := filepath.Join(t.TempDir(), "source-extract.txt")
+	extractBackupEntry(
+		t,
+		destination,
+		"data/research/artifacts/research_run_1/"+strings.Repeat("a", 64),
+		copyPath,
+	)
+	if contents, err := os.ReadFile(copyPath); err != nil || string(contents) != artifactData {
+		t.Fatalf("restored source extract = %q, %v; want %q", contents, err, artifactData)
+	}
+}
+
 func TestExportBackupRejectsDestinationInsideDataDirectory(t *testing.T) {
 	root := t.TempDir()
 	writeBackupFixture(t, filepath.Join(root, "config", "settings.json"), `{}`)

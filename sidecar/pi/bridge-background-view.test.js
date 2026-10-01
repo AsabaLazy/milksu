@@ -2,8 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   backgroundTaskMetasForSession,
+  commandActivityLabel,
   projectBackgroundTaskMetas,
 } from "./bridge-background-view.js";
+
+test("activity command labels hide every command argument", () => {
+  assert.equal(commandActivityLabel("git status --porcelain"), "git [arguments hidden]");
+  assert.equal(commandActivityLabel("TOKEN=synthetic-secret curl https://example.test"), "shell [arguments hidden]");
+});
 
 test("background task selection isolates conversations sharing one workspace", () => {
   const selected = backgroundTaskMetasForSession([
@@ -34,7 +40,7 @@ test("background task projection keeps active and recent Pi tasks without env va
       kind: "process",
       status: "running",
       startedAt: 1_990_000,
-      command: "npm run dev",
+      command: "npm run dev --token synthetic-background-token",
       cwd: "/workspace",
       pid: 4321,
       pgid: 4320,
@@ -69,7 +75,7 @@ test("background task projection keeps active and recent Pi tasks without env va
   }));
 
   assert.deepEqual(tasks.map(task => task.id), ["running", "recent"]);
-  assert.equal(tasks[0].command, "npm run dev");
+  assert.equal(tasks[0].command, "npm [arguments hidden]");
   assert.equal(tasks[0].pgid, 4320);
   assert.match(tasks[0].logTail, /ready on/);
   assert.equal(tasks[0].logTruncated, true);

@@ -14,6 +14,7 @@ import (
 	"github.com/MilkSU-Official/milksu/internal/ctfshow"
 	"github.com/MilkSU-Official/milksu/internal/modelusage"
 	"github.com/MilkSU-Official/milksu/internal/nssctf"
+	"github.com/MilkSU-Official/milksu/internal/research"
 	"github.com/MilkSU-Official/milksu/internal/securityruntime"
 
 	_ "modernc.org/sqlite"
@@ -56,6 +57,12 @@ func TestDatabaseCompatDescriptors(t *testing.T) {
 			modelusage.SupportedDatabaseVersion,
 		)
 	}
+	if research.SupportedDatabaseVersion != 3 {
+		t.Fatalf(
+			"research.SupportedDatabaseVersion = %d, want 3",
+			research.SupportedDatabaseVersion,
+		)
+	}
 	descriptors := databaseCompatDescriptors()
 	want := []appdata.DatabaseDescriptor{
 		{
@@ -82,6 +89,11 @@ func TestDatabaseCompatDescriptors(t *testing.T) {
 			LogicalName:  "Coding Agent Usage",
 			RelativePath: "data/stores/usage/model-usage.sqlite3",
 			Supported:    modelusage.SupportedDatabaseVersion,
+		},
+		{
+			LogicalName:  "Research",
+			RelativePath: "research/research.sqlite3",
+			Supported:    research.SupportedDatabaseVersion,
 		},
 	}
 	if !reflect.DeepEqual(descriptors, want) {
@@ -159,14 +171,21 @@ func TestGetLocalDataStatusIncludesDatabaseCompatibility(t *testing.T) {
 	if err := usageStore.Close(); err != nil {
 		t.Fatal(err)
 	}
+	researchStore, err := research.OpenStore(dataDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := researchStore.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	app := &App{homeDirectory: dataDirectory, dataDirectory: filepath.Join(dataDirectory, "data")}
 	status, err := app.GetLocalDataStatus()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.Databases) != 5 {
-		t.Fatalf("databases count = %d, want 5: %#v", len(status.Databases), status.Databases)
+	if len(status.Databases) != 6 {
+		t.Fatalf("databases count = %d, want 6: %#v", len(status.Databases), status.Databases)
 	}
 
 	eventStore := status.Databases[0]
@@ -250,5 +269,14 @@ func TestGetLocalDataStatusIncludesDatabaseCompatibility(t *testing.T) {
 	if usageStatus.Current == nil || *usageStatus.Current != 1 ||
 		usageStatus.Supported == nil || *usageStatus.Supported != modelusage.SupportedDatabaseVersion {
 		t.Fatalf("unexpected Coding Agent Usage versions: %#v", usageStatus)
+	}
+
+	researchStatus := status.Databases[5]
+	if researchStatus.LogicalName != "Research" ||
+		researchStatus.RelativePath != "research/research.sqlite3" ||
+		researchStatus.State != "compatible" ||
+		researchStatus.Current == nil || *researchStatus.Current != research.SupportedDatabaseVersion ||
+		researchStatus.Supported == nil || *researchStatus.Supported != research.SupportedDatabaseVersion {
+		t.Fatalf("unexpected Research database status: %#v", researchStatus)
 	}
 }

@@ -13,6 +13,7 @@ import {
   defaultWorkspaceActionTimeoutMs,
   formatCodingWorkspaceInput,
   normalizeCodingWorkspaceAction,
+  researchBrowserWorkspaceActionBlocked,
   describeWorkspaceCompaction,
   queueWorkspaceCompaction,
   runQueuedWorkspaceCompaction,
@@ -146,7 +147,21 @@ test("workspace guidance is a short when-to-use routing rule", () => {
       action: "focus_browser_tab",
       query: "bilibili",
     }),
-    "focus_browser_tab · 查询 bilibili",
+    "focus_browser_tab",
+  );
+  assert.equal(
+    formatCodingWorkspaceInput({
+      action: "open_browser_tab",
+      url: "https://example.org/?token=synthetic-secret",
+    }),
+    "open_browser_tab",
+  );
+  assert.doesNotMatch(
+    formatCodingWorkspaceInput({
+      action: "get_research_run",
+      runId: "synthetic-provider-secret",
+    }, { secrets: ["synthetic-provider-secret"] }),
+    /synthetic-provider-secret/,
   );
   assert.equal(
     formatCodingWorkspaceInput({
@@ -239,6 +254,101 @@ test("workspace extension registers one reviewed desktop tool", async () => {
   const result = await tools[0].execute("call-1", { action: "list_browser_tabs" });
   assert.equal(requested[0].action, "list_browser_tabs");
   assert.match(result.content[0].text, /tabs/);
+});
+
+test("Research blocks generic Browser tab operations while worker context remains active", () => {
+  for (const action of [
+    "list_browser_tabs",
+    "open_browser_tab",
+    "focus_browser_tab",
+    "close_browser_tab",
+    "close_all_browser_tabs",
+  ]) {
+    assert.match(researchBrowserWorkspaceActionBlocked(action, true), /typed Research Browser/u);
+    assert.equal(researchBrowserWorkspaceActionBlocked(action, false), "");
+  }
+  assert.equal(researchBrowserWorkspaceActionBlocked("open_research_browser_tab", true), "");
+});
+
+test("research workspace actions are typed, Pi-side, and omit extract text from activity", async () => {
+  const requested = [];
+  const observed = [];
+  const tools = [];
+  const extension = createCodingWorkspaceExtension(
+    "conversation-1",
+    () => ({ executionMode: "go", approvalPolicy: "workspace-auto" }),
+    async request => {
+      requested.push(request);
+      if (request.action === "register_research_task") {
+        return JSON.stringify({ task: {
+          id: "research_task_1",
+          runId: "research_run_1",
+          prompt: request.input.taskPrompt,
+        } });
+      }
+      return JSON.stringify({ run: { id: "research_run_1" } });
+    },
+    undefined,
+    undefined,
+    event => observed.push(event),
+    () => ["synthetic-provider-secret"],
+  );
+  extension({ registerTool(tool) { tools.push(tool); } });
+
+  assert.equal(normalizeCodingWorkspaceAction("start_research_run"), "start_research_run");
+  assert.equal(normalizeCodingWorkspaceAction("register_research_task"), "register_research_task");
+  assert.equal(normalizeCodingWorkspaceAction("record_research_citation"), "record_research_citation");
+  assert.match(codingWorkspaceActionBlocked("start_research_run", {
+    executionMode: "plan",
+    approvalPolicy: "workspace-auto",
+  }), /Plan|只读/);
+  assert.equal(codingWorkspaceActionBlocked("start_research_run", {
+    executionMode: "go",
+    approvalPolicy: "workspace-auto",
+  }), "");
+
+  await tools[0].execute("call-research", {
+    action: "start_research_run",
+    query: "Compare official release dates without copying synthetic-provider-secret",
+  });
+  assert.equal(requested[0].action, "start_research_run");
+  assert.doesNotMatch(requested[0].input.query, /synthetic-provider-secret/);
+  assert.deepEqual(observed, [{
+    conversationId: "conversation-1",
+    action: "start_research_run",
+    result: JSON.stringify({ run: { id: "research_run_1" } }),
+  }]);
+  await tools[0].execute("call-register-task", {
+    action: "register_research_task",
+    runId: "research_run_1",
+    taskPrompt: "Collect official-source evidence for standard A",
+  });
+  assert.equal(requested[1].action, "register_research_task");
+  assert.equal(observed[1].action, "register_research_task");
+  const signedURL = "https://example.test/file?X-Amz-Credential=synthetic-credential&X-Amz-Signature=synthetic-signature&keep=1";
+  await tools[0].execute("call-open-source", {
+    action: "open_research_browser_tab",
+    runId: "research_run_1",
+    url: signedURL,
+  });
+  assert.equal(requested[2].input.url, signedURL);
+  await tools[0].execute("call-record-source", {
+    action: "record_research_source",
+    runId: "research_run_1",
+    url: signedURL,
+    title: "Official source",
+    extract: `Evidence URL ${signedURL}`,
+  });
+  assert.equal(requested[3].input.url, signedURL);
+  assert.doesNotMatch(requested[3].input.extract, /synthetic-(?:credential|signature)/);
+  const activity = formatCodingWorkspaceInput({
+    action: "record_research_source",
+    runId: "research_run_1",
+    url: "https://example.test/?X-Amz-Signature=synthetic-secret",
+    extract: "synthetic-secret source body",
+  });
+  assert.match(activity, /record_research_source/);
+  assert.doesNotMatch(activity, /synthetic-secret|example\.test/);
 });
 
 test("compact_context queues Pi compaction below the 80 percent auto threshold", async () => {

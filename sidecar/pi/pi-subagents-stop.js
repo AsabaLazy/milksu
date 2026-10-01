@@ -9,7 +9,7 @@ function integerPid(value) {
   return Number.isInteger(pid) && pid > 1 ? pid : 0;
 }
 
-export function commandForPid(pid, platform = process.platform) {
+export function commandForPid(pid, platform = process.platform, processRunner = spawnSync) {
   if (!integerPid(pid)) return "";
   if (platform === "linux") {
     try {
@@ -18,8 +18,26 @@ export function commandForPid(pid, platform = process.platform) {
       return "";
     }
   }
-  const result = spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
-  if (result.status !== 0) return "";
+  const windows = platform === "win32";
+  const executable = windows ? "powershell.exe" : "ps";
+  const args = windows
+    ? [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `$process = Get-CimInstance -ClassName Win32_Process -Filter 'ProcessId = ${integerPid(pid)}'; if ($null -ne $process) { $process.CommandLine }`,
+    ]
+    : ["-p", String(pid), "-o", "command="];
+  let result;
+  try {
+    result = processRunner(executable, args, {
+      encoding: "utf8",
+      windowsHide: windows,
+    });
+  } catch {
+    return "";
+  }
+  if (result?.status !== 0 || result.error) return "";
   return String(result.stdout ?? "").trim();
 }
 
@@ -88,16 +106,19 @@ export function ownedSubagentPids(asyncDir, workspace, options = {}) {
   const status = readStatus(directory, options.readFile);
   if (!status) return { action: "absent", pids: [] };
   if (mapAsyncSubagentStatus(status.state) !== "running") return { action: "absent", pids: [] };
+  const platform = options.platform ?? process.platform;
+  const processRunner = options.processRunner ?? spawnSync;
   const commandFor = options.commandForPid ?? commandForPid;
+  const lookupCommand = pid => commandFor(pid, platform, processRunner);
   const listed = pidsFromStatus(status);
   const runnerPid = integerPid(status.pid);
-  const runnerCommand = runnerPid ? commandFor(runnerPid) : "";
+  const runnerCommand = runnerPid ? lookupCommand(runnerPid) : "";
   if (!runnerPid || !isOwnedSubagentCommand(runnerCommand, "runner")) {
     return { action: "skipped", pids: [] };
   }
   const owned = [];
   for (const pid of listed) {
-    const command = pid === runnerPid ? runnerCommand : commandFor(pid);
+    const command = pid === runnerPid ? runnerCommand : lookupCommand(pid);
     const role = pid === runnerPid ? "runner" : "external";
     if (isOwnedSubagentCommand(command, role)) owned.push(pid);
   }
@@ -115,12 +136,13 @@ export async function terminateConversationSubagents(tasks, workspace, options =
     const timer = setTimeout(resolve, ms);
     timer.unref?.();
   }));
+  const ownershipOptions = { ...options, platform };
   const outcomes = [];
   const signaled = [];
   for (const task of list) {
     const live = task?.status === "running" || task?.status === "start";
     if (!live || !task?.asyncDir) continue;
-    const owned = ownedSubagentPids(task.asyncDir, workspace, options);
+    const owned = ownedSubagentPids(task.asyncDir, workspace, ownershipOptions);
     if (owned.action !== "signaled") {
       outcomes.push({ id: task.id, action: owned.action, pids: [] });
       continue;

@@ -680,10 +680,12 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
     queuedGuidanceStalled, abortStalled: abortStalledProp,
   } = props
 
-  const reviewedComposerSkills: ComposerSkillOption[] = CODING_SKILLS.map(skill => ({
-    ...skill,
-    icon: skillIcons[skill.name] ?? Plug,
-  }))
+  const reviewedComposerSkills: ComposerSkillOption[] = [
+    ...CODING_SKILLS.map(skill => ({
+      ...skill,
+      icon: skillIcons[skill.name] ?? Plug,
+    })),
+  ]
 
   const [draft, setDraft] = useState('')
   // Quoted material the reader picked in the transcript: shown above the input while they type the
@@ -1530,6 +1532,26 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
     const pendingQuotes = quotesInEditor()
     const text = textValue.trim() || (attachments.length ? t('请检查这些附件并完成我接下来需要处理的任务。', 'Please review these attachments and complete the task I need next.') : '')
     if (!text && !pendingQuotes.length) return
+    const invokesDeepResearch = skillToken === 'deep-research'
+      || /^\/skill:deep-research(?:\s|$)/u.test(text)
+    if (invokesDeepResearch && kernel !== 'pi') {
+      setAttachmentError(t('深度研究仅支持 Pi。请切换到 Pi 后再发送。', 'Deep Research is only available with Pi. Select Pi before sending.'))
+      return
+    }
+    if (
+      invokesDeepResearch
+      && (executionMode !== 'go' || approvalPolicy === 'read-only' || goalMode)
+    ) {
+      setAttachmentError(t(
+        '深度研究需要 Pi Go 模式和可写权限。请切换到 Go 并关闭只读策略后再发送。',
+        'Deep Research requires Pi Go mode with write access. Switch to Go and disable the read-only policy before sending.',
+      ))
+      return
+    }
+    if (invokesDeepResearch && parentTurnActive) {
+      setAttachmentError(t('请等待当前回合结束后再启动深度研究。', 'Wait for the current turn to finish before starting Deep Research.'))
+      return
+    }
     if (kernel === 'dsh') {
       const decision = dshSlashDecision({
         kernel: 'dsh',
@@ -2207,7 +2229,18 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
                       {visibleSkillOptions.map(skill => {
                         const Icon = skill.icon
                         return (
-                          <DropdownMenuItem key={skill.name} className="composer-add-option" onSelect={() => insertSkillToken(skill.name)}>
+                          <DropdownMenuItem
+                            key={skill.name}
+                            className="composer-add-option"
+                            disabled={!workspaceReady || (skill.name === 'deep-research' && (
+                              kernel !== 'pi'
+                              || executionMode !== 'go'
+                              || approvalPolicy === 'read-only'
+                              || parentTurnActive
+                              || goalMode
+                            ))}
+                            onSelect={() => insertSkillToken(skill.name)}
+                          >
                             <Icon className="size-4 shrink-0" />
                             <span className="min-w-0 flex-1">
                               <span className="block text-label font-medium">{skill.label}</span>

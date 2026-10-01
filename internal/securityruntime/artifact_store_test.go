@@ -78,3 +78,31 @@ func TestArtifactStoreRejectsPathExpansionAndTampering(t *testing.T) {
 		t.Fatal("tampered artifact path was accepted")
 	}
 }
+
+func TestArtifactStoreRemovesOneJobWithoutFollowingAnother(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewArtifactStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, _, err := store.Put(context.Background(), "job_removed", "action_one", "text/plain", []byte("remove"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, _, err := store.Put(context.Background(), "job_kept", "action_two", "text/plain", []byte("keep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveJob(context.Background(), "job_removed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(context.Background(), removed); err == nil {
+		t.Fatal("removed job artifact remained readable")
+	}
+	if data, err := store.Read(context.Background(), kept); err != nil || string(data) != "keep" {
+		t.Fatalf("unrelated job artifact = %q, %v", data, err)
+	}
+	if err := store.RemoveJob(context.Background(), "../escape"); err == nil {
+		t.Fatal("path-like job ID was accepted for cleanup")
+	}
+}

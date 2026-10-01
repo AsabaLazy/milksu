@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { CONTEXT_COMPACTION_RATIO, contextUsageSnapshot } from "./bridge-compaction.js";
 import { normalizeCodingCollaboration } from "./bridge-collaboration.js";
+import { redactResearchText } from "./bridge-subagent-yield.js";
 
 export const codingWorkspaceToolName = "milksu_workspace";
 
@@ -20,6 +21,10 @@ export const codingWorkspaceReadActions = Object.freeze([
   "search_records",
   "focus_record",
   "list_computer_use_windows",
+  "list_research_runs",
+  "get_research_run",
+  "read_research_source",
+  "read_research_report",
 ]);
 
 export const codingWorkspaceMutatingActions = Object.freeze([
@@ -35,6 +40,16 @@ export const codingWorkspaceMutatingActions = Object.freeze([
   "restore_records",
   "prepare_coding_worktree",
   "lock_computer_use_window",
+  "start_research_run",
+  "register_research_task",
+  "open_research_browser_tab",
+  "seal_research_batch",
+  "begin_research_gap_fill",
+  "record_research_source",
+  "record_research_citation",
+  "complete_research_run",
+  "cancel_research_run",
+  "resume_research_run",
 ]);
 
 const writerWorktreePrepareTimeoutMs = 5 * 60_000;
@@ -43,6 +58,24 @@ const computerUseLockTimeoutMs = 90_000;
 const workspaceActions = new Set([
   ...codingWorkspaceReadActions,
   ...codingWorkspaceMutatingActions,
+]);
+const researchSessionActions = new Set([
+  "start_research_run",
+  "register_research_task",
+  "open_research_browser_tab",
+  "resume_research_run",
+  "begin_research_gap_fill",
+  "complete_research_run",
+  "cancel_research_run",
+  "open_browser_tab",
+  "focus_browser_tab",
+]);
+const researchManagedBrowserActions = new Set([
+  "list_browser_tabs",
+  "open_browser_tab",
+  "focus_browser_tab",
+  "close_browser_tab",
+  "close_all_browser_tabs",
 ]);
 
 const workspacePanels = new Set([
@@ -127,9 +160,27 @@ export function codingWorkspaceActionBlocked(action, policy = {}) {
   return "";
 }
 
-export function formatCodingWorkspaceInput(input) {
+export function researchBrowserWorkspaceActionBlocked(action, researchActive) {
+  const normalized = normalizeCodingWorkspaceAction(action);
+  if (!researchActive || !researchManagedBrowserActions.has(normalized)) return "";
+  return "Deep Research uses only the typed Research Browser source action.";
+}
+
+export function formatCodingWorkspaceInput(input, { environment = process.env, secrets = [] } = {}) {
   const action = normalizeCodingWorkspaceAction(input?.action);
   if (!action) return "";
+  const safeText = value => String(redactResearchText(value, environment, secrets) ?? "").trim();
+  if (
+    action.includes("research_")
+    || action === "open_browser_tab"
+    || action === "focus_browser_tab"
+  ) {
+    return [
+      action,
+      input?.runId ? `run ${safeText(input.runId)}` : "",
+      input?.sourceId ? `source ${safeText(input.sourceId)}` : "",
+    ].filter(Boolean).join(" · ");
+  }
   const kind = workspaceRecordKinds.has(String(input?.kind ?? "").trim())
     ? String(input.kind).trim()
     : "";
@@ -243,6 +294,9 @@ export function createCodingWorkspaceExtension(
   requestAction,
   queueCompact,
   inspectUsage,
+  observeResearchAction,
+  getResearchSecrets,
+  isResearchActive,
 ) {
   return (pi) => {
     pi.registerTool({
@@ -278,10 +332,35 @@ export function createCodingWorkspaceExtension(
           Type.Literal("list_computer_use_windows"),
           Type.Literal("lock_computer_use_window"),
           Type.Literal("prepare_coding_worktree"),
+          Type.Literal("start_research_run"),
+          Type.Literal("register_research_task"),
+          Type.Literal("open_research_browser_tab"),
+          Type.Literal("list_research_runs"),
+          Type.Literal("get_research_run"),
+          Type.Literal("seal_research_batch"),
+          Type.Literal("begin_research_gap_fill"),
+          Type.Literal("record_research_source"),
+          Type.Literal("read_research_source"),
+          Type.Literal("read_research_report"),
+          Type.Literal("record_research_citation"),
+          Type.Literal("complete_research_run"),
+          Type.Literal("cancel_research_run"),
+          Type.Literal("resume_research_run"),
         ]),
         tabId: Type.Optional(Type.String({ maxLength: 80 })),
-        query: Type.Optional(Type.String({ maxLength: 200 })),
+        query: Type.Optional(Type.String({ maxLength: 2000 })),
         url: Type.Optional(Type.String({ maxLength: 2000 })),
+        runId: Type.Optional(Type.String({ maxLength: 128 })),
+        taskPrompt: Type.Optional(Type.String({ maxLength: 16000 })),
+        extract: Type.Optional(Type.String({ maxLength: 4096 })),
+        claim: Type.Optional(Type.String({ maxLength: 2000 })),
+        sourceId: Type.Optional(Type.String({ maxLength: 128 })),
+        verdict: Type.Optional(Type.Union([
+          Type.Literal("supported"),
+          Type.Literal("unsupported"),
+        ])),
+        reason: Type.Optional(Type.String({ maxLength: 1200 })),
+        report: Type.Optional(Type.String({ maxLength: 30000 })),
         path: Type.Optional(Type.String({ maxLength: 500 })),
         panel: Type.Optional(Type.Union([
           Type.Literal("browser"),
@@ -330,6 +409,11 @@ export function createCodingWorkspaceExtension(
         const action = normalizeCodingWorkspaceAction(params.action);
         const blocked = codingWorkspaceActionBlocked(action, getPolicy?.());
         if (blocked) throw new Error(blocked);
+        const researchBrowserBlocked = researchBrowserWorkspaceActionBlocked(
+          action,
+          isResearchActive?.() === true,
+        );
+        if (researchBrowserBlocked) throw new Error(researchBrowserBlocked);
         if (action === "compact_context") {
           const usage = inspectUsage?.(conversationId) ?? {};
           const report = describeWorkspaceCompaction(usage.usage, usage.contextWindow);
@@ -345,12 +429,28 @@ export function createCodingWorkspaceExtension(
           : action === "lock_computer_use_window"
             ? computerUseLockTimeoutMs
             : undefined;
+        const actionInput = action.includes("research_")
+          ? Object.fromEntries(Object.entries(params).map(([key, value]) => {
+            const operationalURL = key === "url"
+              && (action === "open_research_browser_tab" || action === "record_research_source");
+            return [key, typeof value === "string" && !operationalURL
+              ? redactResearchText(value, process.env, getResearchSecrets?.() ?? [])
+              : value];
+          }))
+          : params;
         const result = await requestAction({
           conversationId,
           action,
-          input: params,
+          input: actionInput,
           timeoutMs,
         });
+        if (researchSessionActions.has(action)) {
+          try {
+            observeResearchAction?.({ conversationId, action, result });
+          } catch {
+            // A run projection must not turn a completed workspace action into an error.
+          }
+        }
         const policy = getPolicy?.();
         if (policy && action === "prepare_coding_worktree") {
           try {

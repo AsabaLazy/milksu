@@ -25,6 +25,7 @@ var diagnosticDatabasePaths = []string{
 	filepath.Join("data", "domain", "nssctf", "catalog.sqlite3"),
 	filepath.Join("data", "domain", "ctfshow", "catalog.sqlite3"),
 	filepath.Join("data", "runtime", "events.sqlite3"),
+	filepath.Join("data", "domain", "research", "research.sqlite3"),
 }
 
 var (

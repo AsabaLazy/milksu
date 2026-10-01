@@ -91,6 +91,7 @@ import CodingChangesPanel from '@/components/CodingChangesPanel'
 import CodingComputerUsePanel from '@/components/CodingComputerUsePanel'
 import CodingComputerUsePermissionDialog from '@/components/CodingComputerUsePermissionDialog'
 import CodingMCPReviewCard from '@/components/CodingMCPReviewCard'
+import DeepResearchStatusCard from '@/components/DeepResearchStatusCard'
 import MarkdownContent from '@/components/MarkdownContent'
 import ContextRail from '@/components/ContextRail'
 import WorkspaceModuleTopBar from '@/components/WorkspaceModuleTopBar'
@@ -719,12 +720,19 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   ), [currentThinkingProfile, thinkingLevel])
   const activeExtensions = conversation?.agentExtensions ?? []
   const selectedMCPServers = mcpServers ?? []
+  const agentKernel: 'pi' | 'dsh' = kernel ?? (conversation?.kernel === 'dsh' ? 'dsh' : 'pi')
   const enabledUserSkills = useMemo(() => userSkills.filter(skill => skill.enabled), [userSkills])
   const userSkillNames = useMemo(() => enabledUserSkills.map(skill => skill.name), [enabledUserSkills])
-  const activeSkills = useMemo(() => [
-    ...enabledCodingSkillNames(settings?.disabled_skills),
-    ...userSkillNames,
-  ], [settings?.disabled_skills, userSkillNames])
+  const activeSkills = useMemo(() => {
+    const skills = [
+      ...enabledCodingSkillNames(settings?.disabled_skills),
+      ...userSkillNames,
+    ].filter(name => name !== 'deep-research')
+    if (agentKernel === 'pi' && !settings?.disabled_skills?.includes('deep-research')) {
+      skills.push('deep-research')
+    }
+    return skills
+  }, [agentKernel, settings?.disabled_skills, userSkillNames])
   const userMCPServers = useMemo(() => (
     (mcpConfig?.servers ?? []).filter(server => server.scope === 'user')
   ), [mcpConfig])
@@ -997,7 +1005,6 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
     || t('新标签页', 'New tab')
   )
   const workspaceLocked = Boolean(conversation?.messages.length)
-  const agentKernel: 'pi' | 'dsh' = kernel ?? (conversation?.kernel === 'dsh' ? 'dsh' : 'pi')
   const workingRoot = workingRootConversation(conversation, conversations.conversations)
   const workingItems = workingItemsForConversation(
     workingRoot,
@@ -3216,6 +3223,21 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
                 onMouseUp={refreshQuoteSelection}
                 onKeyUp={refreshQuoteSelection}
               >
+                {agentKernel === 'pi' && conversation?.id ? (
+                  <DeepResearchStatusCard
+                    key={conversation.id}
+                    conversationId={conversation.id}
+                    canResume={
+                      effectiveExecutionMode === 'go'
+                      && effectiveApprovalPolicy !== 'read-only'
+                      && !goalMode
+                      && !running
+                    }
+                    onResume={runId => onSend?.(
+                      `/skill:deep-research Resume interrupted research run ${runId}. Call milksu_workspace get_research_run and resume_research_run for this exact run before continuing. Restore its persisted plan, sources, worker results, and Sidecar context; do not start a new run.`,
+                    )}
+                  />
+                ) : null}
                 {quoteSelection ? (
                   <ConversationQuoteMenu
                     text={quoteSelection.text}

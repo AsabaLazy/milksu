@@ -71,6 +71,16 @@ const {
   detachBrowserView,
 } = require('./browser-view-attachment.cjs')
 const {
+  applyResearchWebRTCPolicy,
+  canActivateTabInResearchMode,
+  createResearchBrowserNetworkGate,
+  redactResearchDisplayText,
+  redactResearchURL,
+  ResearchEgressProxy,
+  RESEARCH_PROXY_BYPASS_RULES,
+} = require('./research-browser-network-policy.cjs')
+const { createResearchWebContentsDisposer } = require('./research-browser-lifecycle.cjs')
+const {
   probeComputerUsePermissions,
   computerUsePermissionsSettingsURL,
   primeComputerUsePermission,
@@ -187,6 +197,7 @@ const channelIsolation = applyChannelIsolation(desktopIdentity, {
   app,
   instanceId: process.env.MILKSU_INSTANCE_ID,
   homeRoot: stableHomeUserData,
+  userDataPathOverride: process.env.MILKSU_ELECTRON_USER_DATA_DIR,
 })
 if (!app.requestSingleInstanceLock()) {
   app.exit(0)
@@ -557,6 +568,118 @@ class BrowserShell {
     this.window = window
     this.upstreamEndpoint = upstreamEndpoint
     this.sessions = new Map()
+    this.researchNetworkGates = new WeakMap()
+    this.researchPartitions = new Map()
+    this.researchEgressProxy = null
+    this.researchEgressProxyClosing = null
+    this.destroyWebContents = createResearchWebContentsDisposer({
+      gateForPartition: partition => this.researchNetworkGate(partition),
+      hasResearchPartition: partition => this.researchPartitions.has(partition),
+      releaseResearchPartition: partition => this.releaseResearchPartition(partition),
+    })
+  }
+
+  researchNetworkGate(partition) {
+    let gate = this.researchNetworkGates.get(partition)
+    if (!gate) {
+      gate = createResearchBrowserNetworkGate(partition)
+      this.researchNetworkGates.set(partition, gate)
+    }
+    return gate
+  }
+
+  async ensureResearchEgressProxy() {
+    while (this.researchEgressProxyClosing) {
+      try {
+        await this.researchEgressProxyClosing
+      } catch {
+        // Closing a listener must not prevent a later Research tab from starting.
+      }
+    }
+    let proxy = this.researchEgressProxy
+    if (!proxy) {
+      proxy = new ResearchEgressProxy()
+      this.researchEgressProxy = proxy
+    }
+    try {
+      await proxy.start()
+      return proxy
+    } catch (error) {
+      if (this.researchEgressProxy === proxy) this.researchEgressProxy = null
+      try {
+        await proxy.close()
+      } catch {}
+      throw error
+    }
+  }
+
+  async acquireResearchPartition(partition) {
+    let entry = this.researchPartitions.get(partition)
+    if (!entry) {
+      entry = { references: 0, ready: null }
+      this.researchPartitions.set(partition, entry)
+      entry.ready = (async () => {
+        const proxy = await this.ensureResearchEgressProxy()
+        await partition.setProxy({
+          mode: 'fixed_servers',
+          proxyRules: proxy.url,
+          proxyBypassRules: RESEARCH_PROXY_BYPASS_RULES,
+        })
+      })()
+    }
+    entry.references += 1
+    try {
+      await entry.ready
+    } catch (error) {
+      entry.references -= 1
+      if (entry.references === 0 && this.researchPartitions.get(partition) === entry) {
+        this.researchPartitions.delete(partition)
+        await this.closeUnusedResearchEgressProxy()
+      }
+      throw error
+    }
+  }
+
+  async releaseResearchPartition(partition) {
+    const entry = this.researchPartitions.get(partition)
+    if (!entry) return
+    if (entry.references > 0) entry.references -= 1
+    if (entry.references > 0) return
+    this.researchPartitions.delete(partition)
+    try {
+      await partition.setProxy({ mode: 'direct' })
+    } catch {
+      // The partition has no remaining WebContents; still close its local listener.
+    } finally {
+      await this.closeUnusedResearchEgressProxy()
+    }
+  }
+
+  async closeUnusedResearchEgressProxy() {
+    if (this.researchPartitions.size || !this.researchEgressProxy) return
+    const proxy = this.researchEgressProxy
+    this.researchEgressProxy = null
+    const closing = proxy.close()
+    this.researchEgressProxyClosing = closing
+    try {
+      await closing
+    } finally {
+      if (this.researchEgressProxyClosing === closing) {
+        this.researchEgressProxyClosing = null
+      }
+    }
+  }
+
+  async disposeBrowserTab(tab) {
+    detachBrowserView(this.window.contentView, tab)
+    await this.destroyWebContents(tab.view.webContents, tab.partition)
+  }
+
+  configureBrowserPartition(partition) {
+    partition.setUserAgent(BROWSER_USER_AGENT, 'zh-CN,zh;q=0.9,en;q=0.8')
+    partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+    partition.setPermissionCheckHandler(() => false)
+    this.researchNetworkGate(partition)
   }
 
   allowedProfilePath(profilePath) {
@@ -576,6 +699,7 @@ class BrowserShell {
   }
 
   createView(sessionId, partition) {
+    this.researchNetworkGate(partition)
     const view = new WebContentsView({
       webPreferences: {
         session: partition,
@@ -586,9 +710,18 @@ class BrowserShell {
       },
     })
     view.setVisible(false)
+    view.webContents.on('will-navigate', (event, targetURL) => {
+      const gate = this.researchNetworkGate(partition)
+      if (
+        (gate.isResearchMode() || gate.isRestricted(view.webContents.id))
+        && !/^https?:\/\//iu.test(String(targetURL ?? ''))
+      ) {
+        event.preventDefault()
+      }
+    })
     view.webContents.setWindowOpenHandler(details => {
       if (details.url.startsWith('http://') || details.url.startsWith('https://')) {
-        void this.createTab({ sessionId, url: details.url })
+        void this.createTab({ sessionId, url: details.url }, view.webContents.id).catch(() => {})
       }
       return { action: 'deny' }
     })
@@ -612,10 +745,14 @@ class BrowserShell {
   tabSnapshot(session, tabId) {
     const tab = session.tabs.get(tabId)
     if (!tab) throw new Error('browser tab is unavailable')
+    const contents = tab.view.webContents
+    const isResearchTab = this.researchNetworkGate(tab.partition).isRestricted(contents.id)
+    const url = contents.getURL() || ''
+    const title = contents.getTitle() || ''
     return {
       id: tabId,
-      title: tab.view.webContents.getTitle() || '',
-      url: tab.view.webContents.getURL() || '',
+      title: isResearchTab ? redactResearchDisplayText(title) : title,
+      url: isResearchTab ? redactResearchURL(url) : url,
       active: session.activeTabId === tabId,
     }
   }
@@ -644,9 +781,7 @@ class BrowserShell {
     }
     await this.stop({ sessionId })
     const partition = session.fromPath(profilePath)
-    partition.setUserAgent(BROWSER_USER_AGENT, 'zh-CN,zh;q=0.9,en;q=0.8')
-    partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-    partition.setPermissionCheckHandler(() => false)
+    this.configureBrowserPartition(partition)
     const view = this.createView(sessionId, partition)
     this.window.contentView.addChildView(view)
     await view.webContents.loadURL(initialURL ? initialURL.toString() : 'about:blank')
@@ -658,12 +793,15 @@ class BrowserShell {
       })
       const cdpEndpoint = await proxy.start()
       const tabId = `tab_${randomUUID()}`
-      const tab = { view, targetId, attached: true }
+      const tab = { view, targetId, attached: true, partition }
       detachBrowserView(this.window.contentView, tab)
       this.sessions.set(sessionId, {
         partition,
         profilePath,
         proxy,
+        researchMode: false,
+        stopping: false,
+        pendingTabCreations: new Set(),
         activeTabId: tabId,
         tabs: new Map([[tabId, tab]]),
         viewport: { x: 0, y: 0, width: 1, height: 1, visible: false },
@@ -727,7 +865,15 @@ class BrowserShell {
   navigate(request) {
     const url = parseURL(String(request?.url ?? ''))
     if (!url || !['http:', 'https:'].includes(url.protocol)) throw new Error('invalid browser URL')
-    return this.activeTab(this.get(request)).view.webContents.loadURL(url.toString())
+    const current = this.get(request)
+    const tab = this.activeTab(current)
+    if (
+      current.researchMode
+      && !this.researchNetworkGate(tab.partition).isRestricted(tab.view.webContents.id)
+    ) {
+      throw new Error('open a source with the typed Research Browser action before navigating')
+    }
+    return tab.view.webContents.loadURL(url.toString())
   }
 
   back(request) {
@@ -744,9 +890,28 @@ class BrowserShell {
     this.activeTab(this.get(request)).view.webContents.reload()
   }
 
-  async createTab(request) {
+  setResearchMode(request) {
     const current = this.get(request)
-    if (current.tabs.size >= MAX_BROWSER_TABS) {
+    current.researchMode = request?.enabled === true
+    this.researchNetworkGate(current.partition).setResearchMode(current.researchMode)
+    return { active: current.researchMode }
+  }
+
+  async createTab(request, openerWebContentsId = null) {
+    const current = this.get(request)
+    if (current.stopping) throw new Error('browser session is stopping')
+    const pending = { view: null, done: null }
+    current.pendingTabCreations.add(pending)
+    pending.done = this.createTabInSession(request, openerWebContentsId, current, pending)
+    try {
+      return await pending.done
+    } finally {
+      current.pendingTabCreations.delete(pending)
+    }
+  }
+
+  async createTabInSession(request, openerWebContentsId, current, pending) {
+    if (current.tabs.size + current.pendingTabCreations.size > MAX_BROWSER_TABS) {
       throw new Error(`最多打开 ${MAX_BROWSER_TABS} 个标签页`)
     }
     const rawURL = String(request?.url ?? '').trim()
@@ -755,14 +920,74 @@ class BrowserShell {
       throw new Error('invalid browser URL')
     }
     const tabId = `tab_${randomUUID()}`
-    const view = this.createView(String(request.sessionId ?? ''), current.partition)
-    this.window.contentView.addChildView(view)
-    if (url) await view.webContents.loadURL(url.toString())
-    const targetId = await this.identifyTarget(view)
-    const tab = { view, targetId, attached: true }
-    detachBrowserView(this.window.contentView, tab)
-    current.tabs.set(tabId, tab)
+    const openerTab = openerWebContentsId === null
+      ? null
+      : [...current.tabs.values()].find(tab => tab.view.webContents.id === openerWebContentsId)
+    const openerPartition = openerTab?.partition
+    const openerIsResearch = openerTab && this.researchNetworkGate(openerPartition)
+      .isRestricted(openerWebContentsId)
+    const researchTab = current.researchMode || openerIsResearch
+    const partition = openerIsResearch
+      ? openerPartition
+      : researchTab
+        ? session.fromPartition(`milksu-research-${randomUUID()}`)
+        : current.partition
+    pending.partition = partition
+    if (researchTab && !this.researchPartitions.has(partition)) {
+      this.configureBrowserPartition(partition)
+    }
+    let researchPartitionAcquired = false
+    let view
+    let viewAdded = false
+    const researchNetworkGate = this.researchNetworkGate(partition)
+    try {
+      if (researchTab) {
+        await this.acquireResearchPartition(partition)
+        researchPartitionAcquired = true
+      }
+      if (current.stopping) throw new Error('browser session is stopping')
+      view = this.createView(String(request.sessionId ?? ''), partition)
+      pending.view = view
+      if (researchTab) {
+        researchNetworkGate.setResearchMode(true)
+        researchNetworkGate.mark(view.webContents.id)
+        applyResearchWebRTCPolicy(view.webContents)
+      }
+      this.window.contentView.addChildView(view)
+      viewAdded = true
+      if (url) await view.webContents.loadURL(url.toString())
+      if (current.stopping) throw new Error('browser session is stopping')
+      const targetId = await this.identifyTarget(view)
+      if (current.stopping) throw new Error('browser session is stopping')
+      const tab = { view, targetId, attached: true, partition }
+      detachBrowserView(this.window.contentView, tab)
+      viewAdded = false
+      current.tabs.set(tabId, tab)
+      pending.view = null
+    } catch (error) {
+      if (viewAdded && view) {
+        try {
+          this.window.contentView.removeChildView(view)
+        } catch {}
+      }
+      pending.view = null
+      if (view) {
+        try {
+          await this.destroyWebContents(view.webContents, partition)
+        } catch {}
+      } else if (researchPartitionAcquired) {
+        try { await this.releaseResearchPartition(partition) } catch {}
+      }
+      throw error
+    }
     return this.activateTab({ sessionId: request.sessionId, tabId })
+  }
+
+  async createResearchTab(request) {
+    const current = this.get(request)
+    current.researchMode = true
+    this.researchNetworkGate(current.partition).setResearchMode(true)
+    return this.createTab(request)
   }
 
   async activateTab(request) {
@@ -771,8 +996,14 @@ class BrowserShell {
     if (!BROWSER_TAB_PATTERN.test(tabId) || !current.tabs.has(tabId)) {
       throw new Error('browser tab is unavailable')
     }
-    current.activeTabId = tabId
     const tab = current.tabs.get(tabId)
+    if (!canActivateTabInResearchMode(
+      current.researchMode,
+      this.researchNetworkGate(tab.partition).isRestricted(tab.view.webContents.id),
+    )) {
+      throw new Error('unverified Browser tabs cannot be focused during Deep Research')
+    }
+    current.activeTabId = tabId
     current.proxy?.setAllowedTarget(tab.targetId)
     this.applyViewport(current)
     return this.listTabs(request)
@@ -780,19 +1011,32 @@ class BrowserShell {
 
   async closeAllTabs(request) {
     const current = this.get(request)
-    const keepId = current.activeTabId && current.tabs.has(current.activeTabId)
-      ? current.activeTabId
-      : [...current.tabs.keys()][0]
-    for (const [tabId, tab] of [...current.tabs.entries()]) {
+    const activeTabIsResearch = current.activeTabId
+      && current.tabs.has(current.activeTabId)
+      && this.researchNetworkGate(current.tabs.get(current.activeTabId).partition)
+        .isRestricted(current.tabs.get(current.activeTabId).view.webContents.id)
+    const keepId = current.researchMode
+      ? (activeTabIsResearch
+        ? current.activeTabId
+        : [...current.tabs.entries()].find(([, tab]) => (
+          this.researchNetworkGate(tab.partition).isRestricted(tab.view.webContents.id)
+        ))?.[0])
+      : (current.activeTabId && current.tabs.has(current.activeTabId)
+        ? current.activeTabId
+        : [...current.tabs.keys()][0])
+    if (current.researchMode && !keepId) {
+      throw new Error('open a source with the typed Research Browser action before closing tabs')
+    }
+    const closing = [...current.tabs.entries()]
+    for (const [tabId, tab] of closing) {
       if (tabId === keepId) continue
       current.tabs.delete(tabId)
-      detachBrowserView(this.window.contentView, tab)
-      tab.view.webContents.close()
+      await this.disposeBrowserTab(tab)
     }
     if (keepId) {
       await this.activateTab({ sessionId: request.sessionId, tabId: keepId })
       const kept = this.activeTab(current)
-      await kept.view.webContents.loadURL('about:blank')
+      if (!current.researchMode) await kept.view.webContents.loadURL('about:blank')
     }
     return this.listTabs(request)
   }
@@ -805,11 +1049,22 @@ class BrowserShell {
     if (current.tabs.size === 1) {
       throw new Error('最后一个标签页请使用关闭浏览器')
     }
+    const researchNetworkGate = this.researchNetworkGate(tab.partition)
+    const isActiveTab = current.activeTabId === tabId
+    const isResearchTab = researchNetworkGate.isRestricted(tab.view.webContents.id)
+    const nextResearchTab = current.researchMode && isResearchTab
+      ? [...current.tabs.entries()].find(([id, candidate]) => (
+        id !== tabId && this.researchNetworkGate(candidate.partition)
+          .isRestricted(candidate.view.webContents.id)
+      ))?.[0]
+      : ''
+    if (current.researchMode && isResearchTab && !nextResearchTab) {
+      throw new Error('cancel or finish Deep Research before closing its last Browser tab')
+    }
     current.tabs.delete(tabId)
-    detachBrowserView(this.window.contentView, tab)
-    tab.view.webContents.close()
-    if (current.activeTabId === tabId) {
-      const nextId = [...current.tabs.keys()][0]
+    await this.disposeBrowserTab(tab)
+    if (isActiveTab) {
+      const nextId = current.researchMode ? nextResearchTab : [...current.tabs.keys()][0]
       await this.activateTab({ sessionId: request.sessionId, tabId: nextId })
     }
     return this.listTabs(request)
@@ -819,11 +1074,20 @@ class BrowserShell {
     const sessionId = String(request?.sessionId ?? '')
     const current = this.sessions.get(sessionId)
     if (!current) return
+    current.stopping = true
     this.sessions.delete(sessionId)
-    for (const tab of current.tabs.values()) {
-      detachBrowserView(this.window.contentView, tab)
-      tab.view.webContents.close()
-    }
+    const tabs = [...current.tabs.values()]
+    current.tabs.clear()
+    const pendingCreations = [...current.pendingTabCreations]
+    await Promise.allSettled([
+      ...tabs.map(tab => this.disposeBrowserTab(tab)),
+      ...pendingCreations.map(async pending => {
+        if (pending.view && pending.partition) {
+          await this.destroyWebContents(pending.view.webContents, pending.partition)
+        }
+        await pending.done
+      }),
+    ])
     await current.proxy.close()
   }
 
@@ -923,11 +1187,13 @@ async function handleHostRequest(method, payload = {}) {
     case 'browser.start': return browserShell.start(payload)
     case 'browser.setViewport': return browserShell.setViewport(payload)
     case 'browser.navigate': return browserShell.navigate(payload)
+    case 'browser.setResearchMode': return browserShell.setResearchMode(payload)
     case 'browser.back': return browserShell.back(payload)
     case 'browser.forward': return browserShell.forward(payload)
     case 'browser.reload': return browserShell.reload(payload)
     case 'browser.listTabs': return browserShell.listTabs(payload)
     case 'browser.createTab': return browserShell.createTab(payload)
+    case 'browser.createResearchTab': return browserShell.createResearchTab(payload)
     case 'browser.activateTab': return browserShell.activateTab(payload)
     case 'browser.closeTab': return browserShell.closeTab(payload)
     case 'browser.closeAllTabs': return browserShell.closeAllTabs(payload)

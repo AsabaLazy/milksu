@@ -127,6 +127,21 @@ func (s *ArtifactStore) Read(ctx context.Context, artifact Artifact) ([]byte, er
 	return data, nil
 }
 
+// RemoveJob deletes every artifact owned by one validated job ID. Identifiers
+// are restricted to a single path component so cleanup cannot escape the store.
+func (s *ArtifactStore) RemoveJob(ctx context.Context, jobID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateIdentifier("job id", jobID); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(filepath.Join(s.root, jobID)); err != nil {
+		return fmt.Errorf("remove job artifacts: %w", err)
+	}
+	return nil
+}
+
 func verifyFile(path, expectedDigest string) error {
 	file, err := os.Open(path)
 	if err != nil {
