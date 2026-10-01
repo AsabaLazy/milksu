@@ -164,13 +164,15 @@ npm run desktop:start
   &nbsp;
   <a href="https://github.com/SkyAerope"><img src="https://github.com/SkyAerope.png?size=96" width="72" height="72" alt="薄荷布丁"></a>
   &nbsp;
-  <a href="https://github.com/Aeko233"><img src="https://github.com/Aeko233.png?size=96" width="72" height="72" alt="AsabaLazy"></a>
+  <a href="https://github.com/AsabaLazy"><img src="https://github.com/AsabaLazy.png?size=96" width="72" height="72" alt="AsabaLazy"></a>
   &nbsp;
   <a href="https://github.com/luo"><img src="https://github.com/luo.png?size=96" width="72" height="72" alt="Luo"></a>
   &nbsp;
   <a href="https://github.com/shiluoshiro"><img src="https://github.com/shiluoshiro.png?size=96" width="72" height="72" alt="shiluoshiro"></a>
   &nbsp;
   <a href="https://github.com/MetatronPrototype"><img src="https://github.com/MetatronPrototype.png?size=96" width="72" height="72" alt="メタトロン"></a>
+  &nbsp;
+  <a href="https://github.com/senahimenohoshi"><img src="https://github.com/senahimenohoshi.png?size=96" width="72" height="72" alt="senahimenohoshi"></a>
 </p>
 
 感谢在内测期间直接向仓库提交代码的同学。没有 ta 们，MilkSU 无法到今天这样基本可用的地步。
@@ -182,9 +184,10 @@ npm run desktop:start
 | [东云](https://github.com/2409324124) | 账户模型可用性与可调用目录（PR #3） |
 | [荒景肆（ArakeiShi）](https://github.com/ArakeiShi) | Windows 无 Git 启动与 Computer Use 驱动（PR #5）；产物目录和数据目录打开（PR #6）；实验性 v1 本地插件框架（PR #34） |
 | [薄荷布丁（SkyAerope）](https://github.com/SkyAerope) | 自定义中转站保存与 MilkSU 账户行、设置里的数据库兼容行（PR #7） |
-| [AsabaLazy（Aeko233）](https://github.com/Aeko233)、[Luo](https://github.com/luo) | CTF 收藏/全部视图改走本地目录（PR #8）；Windows 源码换行测试（PR #9）；应用级本地调试模式（PR #10）。Aeko233：产品回归脚本保护宿主 MilkSU 进程、启动路径断言适配多平台（PR #171、#172）；Computer Use 的 Cua Driver 升到 0.29.1（PR #184） |
+| [AsabaLazy（Aeko233）](https://github.com/AsabaLazy)、[Luo](https://github.com/luo) | CTF 收藏/全部视图改走本地目录（PR #8）；Windows 源码换行测试（PR #9）；应用级本地调试模式（PR #10）。Aeko233：产品回归脚本保护宿主 MilkSU 进程、启动路径断言适配多平台（PR #171、#172）；Computer Use 的 Cua Driver 升到 0.29.1（PR #184）；Linux 桌面可用性一批：聊天窗口拖拽与最大化、设置页标题栏拖拽区域、开发版关联登录回调（PR #190、#200、#197）；桌面与浏览器 URL 输入校验（PR #191）；浏览器发现与打包测试不再依赖宿主环境（PR #192、#194）；capa 按沙箱平台门控（PR #193）；补齐高风险 hook 依赖缺口（PR #195）；统一诊断导出并校验文件可靠性（PR #196）；TokenFlux 配置弹窗、聊天标题栏与输入框边缘、回到最新按钮（PR #198、#204、#205） |
 | [shiluoshiro](https://github.com/shiluoshiro) | 设置页切换分类时清掉上一分类提示（PR #25） |
-| [メタトロン（MetatronPrototype）](https://github.com/MetatronPrototype) | bash 调用注入默认超时上界，非活跃工作区的 Sidecar 停靠保活（PR #80）；凭据变更改为惰性替换 Sidecar，停止与运行态跟住引擎真相（PR #83）；会话草稿隔离、计划收起、资料页失败重试与钉选排序（PR #97）；回收停止事件限定到当时会话、流式文本按批合并（PR #98）；破坏性删除先测量再判定再记录（PR #105）；HEIC 照片按文件头量尺寸发送（PR #137）、中文根路径的 socket 字节上限（PR #138）；模型失败必须让读者看见、思考复读时提醒（PR #155）；审批条判定抽成可测纯模块（PR #156）；压缩阈值按窗口与最大输出算，面板标出可用输入上限（PR #173） |
+| [メタトロン（MetatronPrototype）](https://github.com/MetatronPrototype) | bash 调用注入默认超时上界，非活跃工作区的 Sidecar 停靠保活（PR #80）；凭据变更改为惰性替换 Sidecar，停止与运行态跟住引擎真相（PR #83）；会话草稿隔离、计划收起、资料页失败重试与钉选排序（PR #97）；回收停止事件限定到当时会话、流式文本按批合并（PR #98）；破坏性删除先测量再判定再记录（PR #105）；HEIC 照片按文件头量尺寸发送（PR #137）、中文根路径的 socket 字节上限（PR #138）；模型失败必须让读者看见、思考复读时提醒（PR #155）；审批条判定抽成可测纯模块（PR #156）；压缩阈值按窗口与最大输出算，面板标出可用输入上限（PR #173）；模型请求两段式预算、回合停滞看门狗、首字节预算调宽、挂死先告警后掐死与引擎重启兜底（PR #203、#208、#212、#213）；桌面任务通知五类（需拍板、异常终止、已完成、疑似挂死、后台失败）加提示音与 Dock 角标，前台压制按会话（PR #210、#211、#214）；巨型对话流式不再整窗重渲染、转写区保住原生滚动惯性（PR #202、#201）；会话状态指示体系与上下文过大的小指示（PR #209、#207）；审批条底色不再半透明（PR #215） |
+| [senahimenohoshi](https://github.com/senahimenohoshi) | Deep Research durable 工作流：研究运行、来源、引用与报告持久化在 research store，支持后台续跑、中断恢复与取消；Research 浏览器走回环 egress 代理隔离出口；对话内状态卡跟住进度与产物（PR #206） |
 
 问题和产品建议可以提到 [GitHub Issues](https://github.com/MilkSU-Official/milksu/issues)，或发到 [milksu@proton.me](mailto:milksu@proton.me)。
 
