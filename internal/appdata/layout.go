@@ -85,10 +85,12 @@ func migrateDataLayout(directory string, fromVersion, toVersion int) error {
 		// the application-level compatibility boundary without moving it.
 		return nil
 	case fromVersion == 1 && toVersion == 2:
-		// The unified ~/.milksu layout is established by migrateLegacyHome
-		// before the version-2 marker is written; a root that already carries
-		// a version-1 marker needs no further moves.
-		return nil
+		// A version-1 root keeps every managed path directly at the root
+		// while version-2 readers resolve the unified subpaths, so the
+		// entries must actually move. The journal inside makes an
+		// interrupted run resumable; the caller writes the version-2
+		// marker only after this returns without error.
+		return migrateDataLayoutV1ToV2(directory)
 	default:
 		return fmt.Errorf(
 			"no MilkSU data layout migration from version %d to %d for %q",
