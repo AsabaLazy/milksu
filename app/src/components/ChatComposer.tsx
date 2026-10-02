@@ -691,6 +691,9 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
   ]
 
   const [draft, setDraft] = useState('')
+  // 输入区形态是否已切到 stack（多行矩形）。带滞回：单行胶囊下文字折到第二行时
+  // 一次性切入并锁住，删字不回切，删到空（且无附件）才回到单行胶囊。
+  const [composerStacked, setComposerStacked] = useState(false)
   // Quoted material the reader picked in the transcript: shown above the input while they type the
   // question it belongs to, and persisted per conversation exactly like the draft.
   const [quotes, setQuotes] = useState<ComposerQuote[]>([])
@@ -1337,10 +1340,42 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
     detectSlashQuery()
   }
 
-  // 这里原本有一个「按内容折成几行」来切换输入区形态（bar ⇄ stack）的 useLayoutEffect。
-  // **已删除**：bar 形态下输入框只占网格第 2 列、stack 形态下横跨整行 ⇒ 两种形态**文字可用宽度不同**,
-  // 于是一旦文字正好卡在换行边界，就会出现「折行 → 切宽形态 → 又回到一行 → 切回窄形态」的**无限振荡**
-  // （真机反馈：每打一个字输入框疯狂跳动）。现在形态固定为 stack，判定与宽度都稳定。
+  // 形态切换（bar ⇄ stack）带滞回，参照 Cursor：单行胶囊下文字折到第二行（或出现
+  // 显式换行）时把 + / 模型 / 发送沉到输入框内底部、胶囊增高为矩形，此后删字不回切，
+  // 删到空（且无附件）才回到单行胶囊。防振荡的关键是只在 bar 形态下测量：bar 形态
+  // 输入框只占网格第 2 列、stack 形态横跨整行，两种形态文字可用宽度不同，若两边都测，
+  // 卡在换行边界就会出现「折行 → 切宽形态 → 又回到一行 → 切回窄形态」的无限振荡
+  // （真机反馈：每打一个字输入框疯狂跳动）。切入后锁定，整段输入过程中高度最多动一次。
+  useLayoutEffect(() => {
+    if (!draft.trim() && !pendingAttachments.length) {
+      setComposerStacked(false)
+      return
+    }
+    if (composerStacked) return
+    const editor = messageEditor.current
+    if (!editor) return
+    let stacked = draft.includes('\n')
+    if (!stacked) {
+      const range = document.createRange()
+      const tops = new Set<number>()
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT)
+      let current = walker.nextNode()
+      while (current) {
+        const parent = current.parentElement
+        if (!parent?.closest('[data-composer-quote]') && current.textContent?.trim()) {
+          range.selectNodeContents(current)
+          for (const rect of range.getClientRects()) {
+            if (rect.width < 1 || rect.height < 1) continue
+            tops.add(Math.round(rect.top))
+          }
+        }
+        current = walker.nextNode()
+      }
+      stacked = tops.size > 1
+    }
+    if (stacked) setComposerStacked(true)
+  }, [draft, pendingAttachments.length, composerStacked])
+
   function removeSlashQueryText() {
     rememberComposerSnapshot()
     const range = slashQueryRange.current
@@ -2008,11 +2043,12 @@ const ChatComposer = forwardRef<ChatComposerHandle, {
 
           <form
             className="chat-composer__island"
-            // 空输入是单行胶囊，一旦有文字或附件就增高为矩形并保持（#209 固定 stack 后
-            // 空态也占两行）。判定只看内容非空，不看折行数：折行数会随形态改变的宽度
-            // 反复变化，正是当初「每打一个字疯狂跳动」的振荡源；非空后形态不再回切，
-            // 打字过程中高度只动一次。
-            data-shape={draft.trim() || pendingAttachments.length ? 'stack' : 'bar'}
+            // 空输入是单行胶囊（#209 固定 stack 后空态也占两行，故恢复 bar 空态）。
+            // 有附件、或文字折到第二行（见上方带滞回的 useLayoutEffect）时增高为矩形
+            // 并保持：删字不回切，删到空才回单行胶囊。判定不直接看折行数往返：
+            // 折行数会随形态改变的宽度反复变化，正是当初「每打一个字疯狂跳动」的
+            // 振荡源；滞回锁定后高度在整段输入过程中最多动一次。
+            data-shape={composerStacked || pendingAttachments.length ? 'stack' : 'bar'}
             onSubmit={event => { event.preventDefault(); submit() }}
           >
             <div className="chat-composer__pill" aria-hidden="true" />
