@@ -473,6 +473,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
   }, [])
   const scrollArea = useRef<HTMLDivElement | null>(null)
   const chatColumnRef = useRef<HTMLDivElement | null>(null)
+  const topChromeRef = useRef<HTMLDivElement | null>(null)
   const bottomChromeRef = useRef<HTMLDivElement | null>(null)
   const APPROVAL_CONFIRM_TIMEOUT_MS = 3000
   const pendingApprovalMessage = conversation?.messages.find(message => (
@@ -2584,7 +2585,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
       const dock = bottomChromeRef.current
       const composer = dock?.querySelector<HTMLElement>('.chat-composer')
       applyChatEdgeChrome(column, {
-        top: 0,
+        top: dockSurface ? 0 : (topChromeRef.current?.offsetHeight ?? 0),
         bottom: dock?.offsetHeight ?? 0,
         frostBottom: composer?.offsetHeight ?? dock?.offsetHeight ?? 0,
       })
@@ -2599,6 +2600,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
       }
     }
     const observer = new ResizeObserver(apply)
+    if (topChromeRef.current) observer.observe(topChromeRef.current)
     const watch = bottomChromeRef.current
     if (watch) {
       observer.observe(watch)
@@ -3038,7 +3040,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
         </div>
       ) : null}
       {!dockSurface ? (
-        <div className="chat-page__titlebar" aria-label={topbarPresentation.title}>
+        <div ref={topChromeRef} className="chat-page__titlebar" aria-label={topbarPresentation.title}>
           <WorkspaceModuleTopBar
             module={topbarModule}
             title={topbarPresentation.title}
@@ -3362,7 +3364,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
               {t('回到最新', 'Latest')}
             </Button>
           ) : null}
-          <ChatEdgeFade />
+          <ChatEdgeFade showTop={!dockSurface} />
           </>
           ) : (
             <div className="flex w-full flex-col items-center px-8">
