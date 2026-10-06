@@ -1036,3 +1036,15 @@ var schemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at)`,
 }
+
+func normalizeTimeBoundary(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return "", err
+	}
+	return parsed.UTC().Format(time.RFC3339), nil
+}

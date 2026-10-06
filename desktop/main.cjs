@@ -197,7 +197,6 @@ const channelIsolation = applyChannelIsolation(desktopIdentity, {
   app,
   instanceId: process.env.MILKSU_INSTANCE_ID,
   homeRoot: stableHomeUserData,
-  userDataPathOverride: process.env.MILKSU_ELECTRON_USER_DATA_DIR,
 })
 if (!app.requestSingleInstanceLock()) {
   app.exit(0)

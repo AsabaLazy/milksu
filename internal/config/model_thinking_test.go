@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestResolveModelThinkingUsesBuiltInPresets(t *testing.T) {
 	tests := []struct {
@@ -20,7 +23,7 @@ func TestResolveModelThinkingUsesBuiltInPresets(t *testing.T) {
 	}
 	for _, test := range tests {
 		profile := ResolveModelThinking(AppSettings{}, "tokenflux", test.model, test.requested)
-		if !profile.Enabled || profile.Level != test.wantLevel || !containsThinkingLevel(profile.Levels, test.wantContains) {
+		if !profile.Enabled || profile.Level != test.wantLevel || !slices.Contains(profile.Levels, test.wantContains) {
 			t.Fatalf("ResolveModelThinking(%q) = %#v", test.model, profile)
 		}
 	}

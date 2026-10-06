@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -353,7 +354,7 @@ func normalizeModels(values []catalogModelRaw) []Model {
 			continue
 		}
 		input := normalizeInput(value.Architecture.InputModalities)
-		if !contains(input, "text") {
+		if !slices.Contains(input, "text") {
 			continue
 		}
 		catalogWindow := value.ContextLength
@@ -417,14 +418,14 @@ func normalizeInput(values []string) []string {
 	result := make([]string, 0, 2)
 	for _, value := range values {
 		value = strings.TrimSpace(strings.ToLower(value))
-		if (value == "text" || value == "image") && !contains(result, value) {
+		if (value == "text" || value == "image") && !slices.Contains(result, value) {
 			result = append(result, value)
 		}
 	}
-	if !contains(result, "text") {
+	if !slices.Contains(result, "text") {
 		result = append([]string{"text"}, result...)
 	}
-	if !contains(result, "image") {
+	if !slices.Contains(result, "image") {
 		result = append(result, "image")
 	}
 	return result
@@ -445,15 +446,6 @@ func modelPriority(id string) int {
 		return 50
 	}
 	return 100
-}
-
-func contains(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
 }
 
 // detectKeyShape classifies a TokenFlux /models response.

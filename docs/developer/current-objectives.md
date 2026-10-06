@@ -86,7 +86,7 @@ tag 与分发 source `a654c4d5` 之间只差测试与文档提交，无未打进
   sidecar 失联后 worker-stop-unconfirmed 无出口（该会话被禁止新 run，只能 Resume 后再
   Cancel 解开）；强杀后孤儿 worker 无清理（detached 子代理可能继续消耗 API 额度）；
   research store 带 v1→v2→v3 迁移阶梯（schema 从未发行，待收平成最终形态）；
-  `MILKSU_ELECTRON_USER_DATA_DIR` 隐藏 env 无调用方待删；删除会话的研究数据级联非原子。
+  删除会话的研究数据级联非原子。
   Windows / Linux 原生完整研究任务未验收；Pi 同轮 worker overlap 未验证。
 - 任务状况桌面通知（#210）当前只在 macOS / Windows 弹；Linux 返回 `unsupported`，
   设置页已注明「Linux 暂不支持桌面通知」。五类开关全默认关。
