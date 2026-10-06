@@ -5,8 +5,8 @@ import {
   stat,
 } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { Client } from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { createFirstPartyPlaywrightMcpServer } from '../sidecar/pi/bridge-mcp.js'
 
 const requiredEnvironment = [

@@ -60,7 +60,7 @@ const dshRuntimeRootPackages = [
 const piLspVersion = '0.29.0'
 const piGoalVersion = '0.43.0'
 const piBackgroundTasksVersion = '0.1.10'
-const piMcpAdapterVersion = '2.17.0'
+const piMcpAdapterVersion = '5.0.0'
 const piSubagentsVersion = '0.74.0'
 const piSubagentsIntegrity = 'sha512-7+67TCpQuYoW2kMu4Kmt4j90hiR8uX8ozg3F/eakApUU6PxK7NteO58ylOWPql7fh/uTIEfS00FT2LKVDTSicw=='
 const playwrightMcpVersion = '0.0.78'

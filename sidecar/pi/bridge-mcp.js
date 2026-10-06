@@ -549,6 +549,21 @@ function reviewedProjectMcpDefinition(definition, serverName) {
   };
 }
 
+// pi-mcp-adapter 5.0.0 defaults an unannotated server to the "legacy"
+// handshake, which cannot reach 2026-07-28-only servers. Stamp "auto" on
+// every server at this funnel so each one offers the modern revision first
+// and falls back to the legacy initialize, whatever built its definition.
+// The stamp overrides any protocolVersion carried by project or user MCP
+// config, like the per-server lifecycle and directTools rewrites below it.
+function withAutoProtocolVersion(mcpServers) {
+  return Object.fromEntries(
+    Object.entries(mcpServers).map(([name, definition]) => [
+      name,
+      { ...definition, protocolVersion: "auto" },
+    ]),
+  );
+}
+
 function adapterConfig(mcpServers) {
   return {
     settings: {
@@ -557,13 +572,21 @@ function adapterConfig(mcpServers) {
       idleTimeout: 10,
       outputGuard: true,
       directTools: false,
+      // 5.0.0 registers per-server mcp__<server> proxy tools by default.
+      // Keep the single proxy surface so every call crosses one approval
+      // and activity boundary.
+      namespaceProxyTools: false,
+      // 5.0.0 can expose an MCP-only JavaScript scripting tool backed by
+      // QuickJS. MilkSU keeps QuickJS off the product path; sandboxing stays
+      // with the bridge-mcp sandbox-exec wrapper.
+      scriptMode: false,
       disableProxyTool: false,
       sampling: false,
       samplingAutoApprove: false,
       elicitation: false,
       autoAuth: false,
     },
-    mcpServers,
+    mcpServers: withAutoProtocolVersion(mcpServers),
   };
 }
 
