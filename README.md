@@ -253,7 +253,7 @@ MilkSU 建立在这些项目之上。第三方保留各自原许可，完整文�
 
 ### 字体与历史界面来源
 
-Inter Variable、Noto Sans SC Variable、Geist 等可变字体经 @fontsource 分发，按 SIL Open Font License 1.1 使用，不因 MilkSU 的 AGPL 授权而改变。更早的界面还残留 ak-ui 与 Beautiful UI 的材料，许可文本在 `third_party/licenses/`；`v26.915.1` 及更早的 Vue 安装包用过 Felinic（`@felinic/ui`），上游未附 SPDX 许可文件。
+Inter Variable 与 Noto Sans SC Variable 可变字体经 @fontsource 分发，按 SIL Open Font License 1.1 使用，不因 MilkSU 的 AGPL 授权而改变。更早的界面还残留 ak-ui 与 Beautiful UI 的材料，许可文本在 `third_party/licenses/`；`v26.915.1` 及更早的 Vue 安装包用过 Felinic（`@felinic/ui`），上游未附 SPDX 许可文件。
 
 ## 许可证
 

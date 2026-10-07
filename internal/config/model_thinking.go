@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 var modelThinkingLevelOrder = []string{
 	"off",
@@ -44,7 +47,7 @@ func ResolveModelThinking(
 		return ModelThinkingProfile{Enabled: false}
 	}
 	level := strings.ToLower(strings.TrimSpace(requested))
-	if !containsThinkingLevel(configured.Levels, level) {
+	if !slices.Contains(configured.Levels, level) {
 		level = configured.DefaultLevel
 	}
 	return ModelThinkingProfile{
@@ -105,7 +108,7 @@ func normalizeModelThinkingConfig(value ModelThinkingConfig) ModelThinkingConfig
 	}
 	defaultLevel := strings.ToLower(strings.TrimSpace(value.DefaultLevel))
 	if !value.Enabled {
-		if !containsThinkingLevel(levels, defaultLevel) {
+		if !slices.Contains(levels, defaultLevel) {
 			defaultLevel = preferredThinkingDefault(levels)
 		}
 		return ModelThinkingConfig{
@@ -117,7 +120,7 @@ func normalizeModelThinkingConfig(value ModelThinkingConfig) ModelThinkingConfig
 	if len(levels) == 0 {
 		levels = []string{"low", "medium", "high"}
 	}
-	if !containsThinkingLevel(levels, defaultLevel) {
+	if !slices.Contains(levels, defaultLevel) {
 		defaultLevel = preferredThinkingDefault(levels)
 	}
 	return ModelThinkingConfig{
@@ -252,21 +255,12 @@ func canonicalThinkingModelID(value string) string {
 }
 
 func validModelThinkingLevel(value string) bool {
-	return containsThinkingLevel(modelThinkingLevelOrder, value)
-}
-
-func containsThinkingLevel(levels []string, target string) bool {
-	for _, level := range levels {
-		if level == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(modelThinkingLevelOrder, value)
 }
 
 func preferredThinkingDefault(levels []string) string {
 	for _, candidate := range []string{"medium", "high", "low", "minimal", "off", "xhigh", "max"} {
-		if containsThinkingLevel(levels, candidate) {
+		if slices.Contains(levels, candidate) {
 			return candidate
 		}
 	}

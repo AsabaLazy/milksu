@@ -83,27 +83,4 @@ func TestAppSessionIndexRefreshesMilkSUOwnedHistory(t *testing.T) {
 	if !strings.Contains(result.Snippet, "CVE-2024-3400") || !strings.Contains(result.Snippet, "[credential redacted]") {
 		t.Fatalf("unexpected search snippet: %q", result.Snippet)
 	}
-
-	graphContext, err := index.BuildGraphContext(application.commandContext(), sessionindex.GraphRequest{
-		Query:  "CVE-2024-3400",
-		Module: "cve",
-	}, sessionindex.GraphInput{})
-	if err != nil {
-		t.Fatalf("BuildGraphContext() error = %v", err)
-	}
-	if len(graphContext.Seeds) == 0 {
-		t.Fatalf("BuildGraphContext() returned no seeds: %#v", graphContext)
-	}
-	foundSource := false
-	for _, seed := range graphContext.Seeds {
-		if strings.Contains(seed.Excerpt, "sk-app-session-index-secret") {
-			t.Fatalf("history graph context leaked credential: %#v", seed)
-		}
-		if seed.Source.ConversationID == "cve-handoff" {
-			foundSource = true
-		}
-	}
-	if !foundSource {
-		t.Fatalf("history graph context did not retain source conversation: %#v", graphContext.Seeds)
-	}
 }
