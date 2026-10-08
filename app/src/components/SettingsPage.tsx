@@ -121,7 +121,7 @@ import {
 import ExternalEditorIcon from '@/components/ExternalEditorIcon'
 import { explainModelVerificationFailure } from '@/lib/tokenFluxError'
 import { applyUiLocale, normalizeUiLocale, t } from '@/lib/uiLocale'
-import { readHostPlatform, toggleWindowMaximize } from '@/lib/hostPlatform'
+import { readHostPlatform } from '@/lib/hostPlatform'
 import {
   CATALOG_MODEL_PROVIDERS,
   MODEL_PROVIDER_API_LABELS,
@@ -573,18 +573,7 @@ export default function SettingsPage({
       <div className="settings-layout flex min-h-0 flex-1">
         <div className="page-scroll min-w-0 flex-1">
           <div className="page-column page-stack" data-plugin-surface="workspace-list">
-            <div
-              className="settings-page-title shell-window-control-safe-x flex items-center gap-1 py-2 text-foreground app-drag"
-              onDoubleClick={(event) => {
-                if (
-                  event.target instanceof Element &&
-                  event.target.closest('.app-no-drag, button, input, select, textarea, a')
-                ) {
-                  return
-                }
-                toggleWindowMaximize()
-              }}
-            >
+            <div className="settings-page-title window-drag-header shell-window-control-safe-x flex items-center gap-1 py-2 text-foreground app-drag">
               {managementView ? (
                 <Button
                   type="button"

@@ -5,7 +5,6 @@ import { Button } from '@/components/ui'
 import WindowTopDragRegion from '@/components/WindowTopDragRegion'
 import profileAvatar from '@/assets/ctf-learner-avatar.png'
 import { invokeCommand, listenEvent } from '@/desktop'
-import { toggleWindowMaximize } from '@/lib/hostPlatform'
 import { isComposingKey } from '@/lib/imeComposition'
 import type { CTFSummary } from '@/ctfTypes'
 import { providerModelLabel } from '@/modelCatalog'
@@ -464,18 +463,7 @@ export default function ProfilePage({
     <main className="profile-page page-scroll min-w-0 flex-1 bg-background text-foreground" aria-label={t('个人资料', 'Profile')}>
       <WindowTopDragRegion />
       <div className="page-column">
-        <header
-          className="shell-window-control-safe-x flex items-center justify-between gap-5 pb-5 app-drag"
-          onDoubleClick={(event) => {
-            if (
-              event.target instanceof Element &&
-              event.target.closest('.app-no-drag, button, input, select, textarea, a')
-            ) {
-              return
-            }
-            toggleWindowMaximize()
-          }}
-        >
+        <header className="window-drag-header shell-window-control-safe-x flex items-center justify-between gap-5 pb-5 app-drag">
           <div className="flex items-center gap-3">
             <UserRound className="size-6 text-primary" />
             <h1 className="text-2xl font-medium tracking-tight">{t('个人资料', 'Profile')}</h1>

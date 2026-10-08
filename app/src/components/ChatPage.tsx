@@ -60,7 +60,6 @@ import {
 import { codingEnvironmentMissing, invokeCommand, listenEvent } from '@/desktop'
 import { toastError } from '@/lib/appToast'
 import WindowTopDragRegion from '@/components/WindowTopDragRegion'
-import { toggleWindowMaximize } from '@/lib/hostPlatform'
 import { isAskMessage } from '@/lib/agentAsk'
 import { nextChatAutoScrollPinned } from '@/lib/chatAutoScroll'
 import { applyChatEdgeChrome } from '@/lib/chatEdgeChrome'
@@ -3661,18 +3660,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
             data-testid="single-right-context-rail"
             onWidthChange={persistContextRailWidth}
             header={(
-              <div
-                className="app-drag flex min-w-0 flex-1 items-center gap-0.5"
-                onDoubleClick={(event) => {
-                  if (
-                    event.target instanceof Element &&
-                    event.target.closest('.app-no-drag, button, input, select, textarea, a')
-                  ) {
-                    return
-                  }
-                  toggleWindowMaximize()
-                }}
-              >
+              <div className="app-drag flex min-w-0 flex-1 items-center gap-0.5">
                 {!transientComputerUsePanel ? (
                   <>
                     <Popover open={railMenuOpen} onOpenChange={open => { setRailMenuOpen(open); if (!open) setRailQuery('') }}>

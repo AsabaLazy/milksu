@@ -1,16 +1,36 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockToggleWindowMaximize = vi.fn()
 vi.mock('@/lib/hostPlatform', () => ({
   toggleWindowMaximize: () => mockToggleWindowMaximize(),
+  attachWindowMaximizeDblClick: (target: EventTarget = window) => {
+    const onDblClick = (event: Event) => {
+      const el = event.target
+      if (!(el instanceof Element)) return
+      if (el.closest('.app-no-drag, button, input, select, textarea, a, [data-no-drag]')) return
+      if (el.closest('.app-drag')) {
+        mockToggleWindowMaximize()
+      }
+    }
+    target.addEventListener('dblclick', onDblClick)
+    return () => target.removeEventListener('dblclick', onDblClick)
+  },
 }))
 
+import { attachWindowMaximizeDblClick } from '@/lib/hostPlatform'
 import AccountLoginPage from './AccountLoginPage'
 
 describe('AccountLoginPage window drag', () => {
+  let detach: () => void
+
+  beforeEach(() => {
+    detach = attachWindowMaximizeDblClick(window)
+  })
+
   afterEach(() => {
+    detach?.()
     cleanup()
     vi.clearAllMocks()
   })

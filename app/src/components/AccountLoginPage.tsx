@@ -3,7 +3,6 @@ import { Mail } from 'lucide-react'
 import { GitHubIcon } from '@/components/GitHubIcon'
 import { Alert, AlertDescription, Button, Input, Label } from '@/components/ui'
 import WindowTopDragRegion from '@/components/WindowTopDragRegion'
-import { toggleWindowMaximize } from '@/lib/hostPlatform'
 import { useT } from '@/hooks/useUiLocale'
 import { accountPasswordProblem, accountUsernameProblem } from '@/lib/accountPassword'
 import type { AccountStatus } from '@/types'
@@ -76,15 +75,6 @@ export default function AccountLoginPage({
     <main
       className="relative flex min-h-screen min-w-0 flex-col items-center justify-start bg-background text-foreground app-drag select-none"
       aria-label={t('登录 MilkSU', 'Sign in to MilkSU')}
-      onDoubleClick={(event) => {
-        if (
-          event.target instanceof Element &&
-          event.target.closest('.app-no-drag, button, input, select, textarea, a')
-        ) {
-          return
-        }
-        toggleWindowMaximize()
-      }}
     >
       <WindowTopDragRegion className="w-full" />
       <section className="flex min-w-0 w-full max-w-[440px] flex-1 flex-col px-8 py-10 md:px-0 md:py-16">

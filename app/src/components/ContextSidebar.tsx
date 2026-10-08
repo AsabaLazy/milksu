@@ -26,7 +26,6 @@ import {
 } from '@/components/ui'
 import { menuContentClass, menuItemClass, menuSeparatorClass } from '@/components/ui/menu'
 import { conversationCopyText } from '@/lib/conversationActions'
-import { toggleWindowMaximize } from '@/lib/hostPlatform'
 import type { CompanionPawState } from '@/lib/companionOverlayState'
 import { formatRelativeAge } from '@/lib/relativeAge'
 import { conversationActivityAt } from '@/lib/workspaceSessionRouting'
@@ -967,10 +966,7 @@ export default function ContextSidebar({
       <div className="agent-sidebar__inner flex min-h-0 shrink-0 flex-col" style={innerStyle}>
         <div className="agent-sidebar__drag" aria-hidden="true">
           <div className="agent-sidebar__drag-gap" />
-          <div
-            className="agent-sidebar__drag-region app-drag"
-            onDoubleClick={() => toggleWindowMaximize()}
-          />
+          <div className="agent-sidebar__drag-region app-drag" />
         </div>
         <div className="agent-sidebar__head relative mb-2.5 h-10 shrink-0">
           {activeSection === 'settings' ? (
