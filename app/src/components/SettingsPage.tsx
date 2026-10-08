@@ -37,6 +37,7 @@ import {
   Textarea,
 } from '@/components/ui'
 import { AccountCredentialSettings } from '@/components/AccountCredentialSettings'
+import WindowTopDragRegion from '@/components/WindowTopDragRegion'
 import { desktopErrorMessage, hasDesktopRuntime, invokeCommand, isMissingDesktopRuntime, listenEvent } from '@/desktop'
 import type {
   BrowserUseRuntime,
@@ -568,15 +569,22 @@ export default function SettingsPage({
 
   return (
     <main className="settings-page flex min-w-0 flex-1 flex-col bg-background">
-      <div
-        className="settings-window-drag-region app-drag"
-        aria-hidden="true"
-        onDoubleClick={() => toggleWindowMaximize()}
-      />
+      <WindowTopDragRegion />
       <div className="settings-layout flex min-h-0 flex-1">
         <div className="page-scroll min-w-0 flex-1">
           <div className="page-column page-stack" data-plugin-surface="workspace-list">
-            <div className="settings-page-title shell-window-control-safe-x flex items-center gap-1 py-2 text-foreground">
+            <div
+              className="settings-page-title shell-window-control-safe-x flex items-center gap-1 py-2 text-foreground app-drag"
+              onDoubleClick={(event) => {
+                if (
+                  event.target instanceof Element &&
+                  event.target.closest('.app-no-drag, button, input, select, textarea, a')
+                ) {
+                  return
+                }
+                toggleWindowMaximize()
+              }}
+            >
               {managementView ? (
                 <Button
                   type="button"
@@ -4032,16 +4040,6 @@ function createSettingsStore(
 }
 
 const settingsPageCss = `
-.settings-window-drag-region {
-  display: none;
-}
-
-:root[data-host-platform='linux'] .settings-window-drag-region {
-  display: block;
-  height: var(--shell-title-safe-top);
-  flex: none;
-}
-
 .settings-page-title {
   --shell-window-control-gutter: 1.25rem;
 }

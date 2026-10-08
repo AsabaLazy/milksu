@@ -59,6 +59,7 @@ import {
 } from 'lucide-react'
 import { codingEnvironmentMissing, invokeCommand, listenEvent } from '@/desktop'
 import { toastError } from '@/lib/appToast'
+import WindowTopDragRegion from '@/components/WindowTopDragRegion'
 import { toggleWindowMaximize } from '@/lib/hostPlatform'
 import { isAskMessage } from '@/lib/agentAsk'
 import { nextChatAutoScrollPinned } from '@/lib/chatAutoScroll'
@@ -3008,11 +3009,7 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
       data-testid={dockSurface ? 'coding-agent-dock-surface' : undefined}
     >
       {!dockSurface ? (
-        <div
-          className="chat-window-drag-region app-drag"
-          aria-hidden="true"
-          onDoubleClick={() => toggleWindowMaximize()}
-        />
+        <WindowTopDragRegion />
       ) : null}
       {!dockSurface ? (
         <div className="shell-window-controls shell-window-controls--end">
@@ -3664,7 +3661,18 @@ const ChatPage = forwardRef<ChatPageHandle, ChatPageProps>(function ChatPage({
             data-testid="single-right-context-rail"
             onWidthChange={persistContextRailWidth}
             header={(
-              <div className="app-drag flex min-w-0 flex-1 items-center gap-0.5">
+              <div
+                className="app-drag flex min-w-0 flex-1 items-center gap-0.5"
+                onDoubleClick={(event) => {
+                  if (
+                    event.target instanceof Element &&
+                    event.target.closest('.app-no-drag, button, input, select, textarea, a')
+                  ) {
+                    return
+                  }
+                  toggleWindowMaximize()
+                }}
+              >
                 {!transientComputerUsePanel ? (
                   <>
                     <Popover open={railMenuOpen} onOpenChange={open => { setRailMenuOpen(open); if (!open) setRailQuery('') }}>
@@ -4467,15 +4475,6 @@ const chatPageCss = `
   padding-bottom: 0.25rem;
 }
 
-.chat-window-drag-region {
-  display: none;
-}
-
-:root[data-host-platform='linux'] .chat-window-drag-region {
-  display: block;
-  height: var(--shell-title-safe-top);
-  flex: none;
-}
 
 .chat-main {
   container-name: chat-main;

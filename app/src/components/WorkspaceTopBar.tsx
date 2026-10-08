@@ -1,3 +1,4 @@
+import { toggleWindowMaximize } from '@/lib/hostPlatform'
 import type { ReactNode } from 'react'
 import WorkspaceTopBarTitle from '@/components/WorkspaceTopBarTitle'
 
@@ -35,6 +36,15 @@ export default function WorkspaceTopBar({
       data-workspace-module={moduleKey}
       data-workspace-topbar-idle={hideIdentity ? '' : undefined}
       data-window-caption-edge={windowCaptionEdge ? '' : undefined}
+      onDoubleClick={event => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest('.app-no-drag, button, input, select, textarea, a')
+        ) {
+          return
+        }
+        toggleWindowMaximize()
+      }}
     >
       <div className="flex min-w-0 items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3">
