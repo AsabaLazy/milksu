@@ -4463,7 +4463,6 @@ const chatPageCss = `
   padding-bottom: 0.25rem;
 }
 
-
 .chat-main {
   container-name: chat-main;
   container-type: inline-size;

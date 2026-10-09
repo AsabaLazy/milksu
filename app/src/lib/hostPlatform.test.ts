@@ -85,4 +85,21 @@ describe('hostPlatform', () => {
     expect(invoke).toHaveBeenCalledTimes(1)
     container.remove()
   })
+
+  it('triggers toggleWindowMaximize exactly once without duplicate dispatch', () => {
+    const invoke = vi.fn().mockResolvedValue(true)
+    const cleanup = attachWindowMaximizeDblClick(window, {
+      milksu: { hostPlatform: 'linux', invoke },
+    })
+
+    const dragRegion = document.createElement('div')
+    dragRegion.className = 'window-top-drag-region app-drag'
+    document.body.appendChild(dragRegion)
+
+    dragRegion.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    cleanup()
+    dragRegion.remove()
+  })
 })
